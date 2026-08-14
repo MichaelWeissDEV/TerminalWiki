@@ -1,4 +1,4 @@
-//! Persistent Tantivy full-text search engine (spec §15, §16).
+//! Persistent Tantivy full-text search engine (spec §11-§16, §24-§26).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -11,10 +11,16 @@ use tantivy::snippet::SnippetGenerator;
 use tantivy::{doc, Index, IndexReader, IndexWriter, ReloadPolicy, Term};
 use terminalwiki_core::{Error, Result};
 
-use crate::entry::IndexEntry;
+use crate::entry::{document_id, IndexDelta, IndexEntry};
 use crate::query::{Query, QueryTerm};
 
-pub const INDEX_SCHEMA_VERSION: u32 = 2;
+pub const INDEX_SCHEMA_VERSION: u32 = 3;
+
+// Ranking constants (spec §24, §25)
+pub const TITLE_EXACT_BOOST: f32 = 10.0;
+pub const TITLE_WORD_BOOST: f32 = 5.0;
+pub const ALIAS_BOOST: f32 = 3.0;
+pub const HEADING_BOOST: f32 = 2.0;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexMeta {
@@ -28,6 +34,7 @@ pub struct TantivyStore {
     index: Index,
     reader: IndexReader,
     _schema: Schema,
+    f_doc_id: Field,
     f_wiki: Field,
     f_path: Field,
     f_relative: Field,
@@ -68,6 +75,7 @@ impl TantivyStore {
         Field,
         Field,
         Field,
+        Field,
     ) {
         let mut builder = Schema::builder();
 
@@ -78,6 +86,7 @@ impl TantivyStore {
             .set_indexing_options(text_indexing)
             .set_stored();
 
+        let f_doc_id = builder.add_text_field("doc_id", STRING | STORED);
         let f_wiki = builder.add_text_field("wiki", STRING | STORED);
         let f_path = builder.add_text_field("path", STRING | STORED);
         let f_relative = builder.add_text_field("relative", STRING | STORED);
@@ -94,6 +103,7 @@ impl TantivyStore {
         let schema = builder.build();
         (
             schema,
+            f_doc_id,
             f_wiki,
             f_path,
             f_relative,
@@ -120,6 +130,7 @@ impl TantivyStore {
 
         let (
             schema,
+            f_doc_id,
             f_wiki,
             f_path,
             f_relative,
@@ -150,6 +161,7 @@ impl TantivyStore {
             index,
             reader,
             _schema: schema,
+            f_doc_id,
             f_wiki,
             f_path,
             f_relative,
@@ -172,6 +184,7 @@ impl TantivyStore {
 
         let (
             schema,
+            f_doc_id,
             f_wiki,
             f_path,
             f_relative,
@@ -200,6 +213,7 @@ impl TantivyStore {
             index,
             reader,
             _schema: schema,
+            f_doc_id,
             f_wiki,
             f_path,
             f_relative,
@@ -215,50 +229,19 @@ impl TantivyStore {
         })
     }
 
-    /// Indexes entries in the Tantivy index.
-    pub fn update_entries(&mut self, _dir: &Path, entries: &[IndexEntry]) -> Result<()> {
+    /// Fully rebuilds the Tantivy index from scratch (spec §15).
+    pub fn rebuild_all(&mut self, entries: &[IndexEntry]) -> Result<()> {
         let mut writer: IndexWriter = self
             .index
-            .writer(50_000_000) // 50 MB buffer
+            .writer(50_000_000)
             .map_err(|e| Error::index(format!("Failed to acquire index writer: {e}")))?;
 
-        // Clear existing docs to prevent duplication on rebuild
         writer
             .delete_all_documents()
             .map_err(|e| Error::index(format!("Failed to clear index: {e}")))?;
 
         for entry in entries {
-            let rel_str = entry.relative.to_string_lossy().to_string();
-            let path_str = entry.path.to_string_lossy().to_string();
-            let ext_str = entry
-                .relative
-                .extension()
-                .map(|e| e.to_string_lossy().to_string())
-                .unwrap_or_default();
-            let ct_str = entry.content_type;
-            let ct_name = terminalwiki_core::filetype::ContentType::from(ct_str).as_str();
-
-            let mut doc = doc!(
-                self.f_wiki => entry.wiki.clone(),
-                self.f_path => path_str,
-                self.f_relative => rel_str,
-                self.f_title => entry.title.clone(),
-                self.f_aliases => entry.aliases.join(" "),
-                self.f_headings => entry.headings.join(" "),
-                self.f_body => entry.body_text.clone(),
-                self.f_extension => ext_str,
-                self.f_content_type => ct_name,
-                self.f_mtime => entry.mtime as i64,
-                self.f_size => entry.size,
-            );
-
-            for tag in &entry.tags {
-                doc.add_text(self.f_tags, tag);
-            }
-
-            writer
-                .add_document(doc)
-                .map_err(|e| Error::index(e.to_string()))?;
+            self.add_entry_doc(&mut writer, entry)?;
         }
 
         writer
@@ -269,6 +252,81 @@ impl TantivyStore {
             .reload()
             .map_err(|e| Error::index(format!("Failed to reload reader: {e}")))?;
 
+        Ok(())
+    }
+
+    /// Applies an incremental delta without wiping existing documents (spec §11, §14).
+    pub fn apply_delta(&mut self, delta: &IndexDelta) -> Result<()> {
+        let mut writer: IndexWriter = self
+            .index
+            .writer(50_000_000)
+            .map_err(|e| Error::index(format!("Failed to acquire index writer: {e}")))?;
+
+        // 1. Delete removed documents
+        for doc_id in &delta.deleted_doc_ids {
+            writer.delete_term(Term::from_field_text(self.f_doc_id, doc_id));
+        }
+
+        // 2. Delete and re-add modified documents
+        for entry in &delta.modified {
+            writer.delete_term(Term::from_field_text(self.f_doc_id, &entry.document_id));
+            self.add_entry_doc(&mut writer, entry)?;
+        }
+
+        // 3. Add new documents
+        for entry in &delta.added {
+            self.add_entry_doc(&mut writer, entry)?;
+        }
+
+        writer
+            .commit()
+            .map_err(|e| Error::index(format!("Failed to commit delta: {e}")))?;
+
+        self.reader
+            .reload()
+            .map_err(|e| Error::index(format!("Failed to reload reader: {e}")))?;
+
+        Ok(())
+    }
+
+    fn add_entry_doc(&self, writer: &mut IndexWriter, entry: &IndexEntry) -> Result<()> {
+        let rel_str = entry.relative.to_string_lossy().to_string();
+        let path_str = entry.path.to_string_lossy().to_string();
+        let ext_str = entry
+            .relative
+            .extension()
+            .map(|e| e.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let ct_name = terminalwiki_core::filetype::ContentType::from(entry.content_type).as_str();
+
+        let doc_id = if entry.document_id.is_empty() {
+            document_id(&entry.wiki, &entry.relative)
+        } else {
+            entry.document_id.clone()
+        };
+
+        let mut doc = doc!(
+            self.f_doc_id => doc_id,
+            self.f_wiki => entry.wiki.clone(),
+            self.f_path => path_str,
+            self.f_relative => rel_str,
+            self.f_title => entry.title.clone(),
+            self.f_aliases => entry.aliases.join(" "),
+            self.f_headings => entry.headings.join(" "),
+            self.f_body => entry.body_text.clone(),
+            self.f_extension => ext_str,
+            self.f_content_type => ct_name,
+            self.f_mtime => entry.mtime as i64,
+            self.f_size => entry.size,
+        );
+
+        for tag in &entry.tags {
+            doc.add_text(self.f_tags, tag);
+        }
+
+        writer
+            .add_document(doc)
+            .map_err(|e| Error::index(e.to_string()))?;
         Ok(())
     }
 
@@ -354,13 +412,29 @@ impl TantivyStore {
                                 Term::from_field_text(self.f_title, &w_lower),
                                 IndexRecordOption::WithFreqsAndPositions,
                             )),
-                            5.0, // Title matches boosted by 5x
+                            TITLE_WORD_BOOST,
+                        ));
+                        let q_alias: Box<dyn TantivyQuery> = Box::new(BoostQuery::new(
+                            Box::new(TermQuery::new(
+                                Term::from_field_text(self.f_aliases, &w_lower),
+                                IndexRecordOption::WithFreqsAndPositions,
+                            )),
+                            ALIAS_BOOST,
+                        ));
+                        let q_heading: Box<dyn TantivyQuery> = Box::new(BoostQuery::new(
+                            Box::new(TermQuery::new(
+                                Term::from_field_text(self.f_headings, &w_lower),
+                                IndexRecordOption::WithFreqsAndPositions,
+                            )),
+                            HEADING_BOOST,
                         ));
                         let q_body: Box<dyn TantivyQuery> = Box::new(TermQuery::new(
                             Term::from_field_text(self.f_body, &w_lower),
                             IndexRecordOption::WithFreqsAndPositions,
                         ));
                         sub_clauses.push((Occur::Should, q_title));
+                        sub_clauses.push((Occur::Should, q_alias));
+                        sub_clauses.push((Occur::Should, q_heading));
                         sub_clauses.push((Occur::Should, q_body));
                     }
                     if !sub_clauses.is_empty() {
@@ -404,7 +478,7 @@ impl TantivyStore {
                             Term::from_field_text(self.f_title, &t.to_lowercase()),
                             IndexRecordOption::WithFreqsAndPositions,
                         )),
-                        10.0,
+                        TITLE_EXACT_BOOST,
                     ));
                     clauses.push((Occur::Must, q));
                 }

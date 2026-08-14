@@ -1,13 +1,19 @@
-//! Per-document metadata and record definitions (spec §15, §16).
+//! Per-document metadata, persistent state and index delta definitions (spec §12-§17).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use terminalwiki_core::filetype::ContentType;
 
-/// Persistent metadata entry representing an indexed file.
+/// Derives a stable, collision-free internal document identifier (spec §12).
+pub fn document_id(wiki: &str, relative: &Path) -> String {
+    format!("{wiki}\0{}", relative.to_string_lossy())
+}
+
+/// In-memory entry during indexing containing parsed body text for Tantivy.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexEntry {
+    pub document_id: String,
     pub wiki: String,
     pub path: PathBuf,
     pub relative: PathBuf,
@@ -22,6 +28,55 @@ pub struct IndexEntry {
     pub headings: Vec<String>,
     pub body_text: String,
     pub wiki_links: Vec<String>,
+}
+
+impl IndexEntry {
+    /// Extracts the lightweight metadata representation for persistent `state.json`.
+    pub fn to_state(&self) -> DocumentState {
+        DocumentState {
+            document_id: self.document_id.clone(),
+            wiki: self.wiki.clone(),
+            path: self.path.clone(),
+            relative: self.relative.clone(),
+            size: self.size,
+            mtime: self.mtime,
+            content_hash: self.content_hash,
+            content_type: self.content_type,
+            title: self.title.clone(),
+            aliases: self.aliases.clone(),
+            tags: self.tags.clone(),
+            headings: self.headings.clone(),
+            wiki_links: self.wiki_links.clone(),
+        }
+    }
+}
+
+/// Lightweight persistent metadata stored in `state.json` (spec §17).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DocumentState {
+    pub document_id: String,
+    pub wiki: String,
+    pub path: PathBuf,
+    pub relative: PathBuf,
+    pub size: u64,
+    pub mtime: u64,
+    #[serde(with = "hex_serde")]
+    pub content_hash: [u8; 32],
+    pub content_type: ContentTypeHelper,
+    pub title: String,
+    pub aliases: Vec<String>,
+    pub tags: Vec<String>,
+    pub headings: Vec<String>,
+    pub wiki_links: Vec<String>,
+}
+
+/// Delta model computed during incremental updates (spec §13).
+#[derive(Debug, Default)]
+pub struct IndexDelta {
+    pub added: Vec<IndexEntry>,
+    pub modified: Vec<IndexEntry>,
+    pub deleted_doc_ids: Vec<String>,
+    pub unchanged: Vec<DocumentState>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

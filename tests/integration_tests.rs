@@ -51,9 +51,13 @@ fn test_index_lifecycle_flow() {
     let idx_dir = cache_root.join("testwiki");
     fs::create_dir_all(&idx_dir).unwrap();
 
-    let entries = terminalwiki_index::indexer::update_index(&wiki, &config, None).unwrap();
-    assert_eq!(entries.len(), 3);
-    terminalwiki_index::store::save_index(&idx_dir, &entries).unwrap();
+    let raw_entries = terminalwiki_index::indexer::build_all(&wiki, &config).unwrap();
+    assert_eq!(raw_entries.len(), 3);
+    let mut tantivy_store = TantivyStore::open_or_create(&idx_dir).unwrap();
+    tantivy_store.rebuild_all(&raw_entries).unwrap();
+    let states: Vec<terminalwiki_index::DocumentState> =
+        raw_entries.into_iter().map(|e| e.to_state()).collect();
+    terminalwiki_index::store::save_state(&idx_dir, &states).unwrap();
 
     let store = TantivyStore::open_reader(&idx_dir).unwrap();
     let q = Query::from_str("allocation").unwrap();
@@ -68,10 +72,24 @@ fn test_index_lifecycle_flow() {
     )
     .unwrap();
 
-    let existing = terminalwiki_index::store::load_index(&idx_dir).unwrap();
-    let updated_entries =
-        terminalwiki_index::indexer::update_index(&wiki, &config, existing).unwrap();
-    terminalwiki_index::store::save_index(&idx_dir, &updated_entries).unwrap();
+    let existing = terminalwiki_index::store::load_index(&idx_dir)
+        .unwrap()
+        .unwrap_or_default();
+    let delta = terminalwiki_index::indexer::compute_delta(&wiki, &config, &existing).unwrap();
+    assert_eq!(delta.modified.len(), 1);
+    assert_eq!(delta.unchanged.len(), 2);
+
+    let mut tantivy_store = TantivyStore::open_or_create(&idx_dir).unwrap();
+    tantivy_store.apply_delta(&delta).unwrap();
+
+    let mut new_states = delta.unchanged;
+    for item in delta.added {
+        new_states.push(item.to_state());
+    }
+    for item in delta.modified {
+        new_states.push(item.to_state());
+    }
+    terminalwiki_index::store::save_state(&idx_dir, &new_states).unwrap();
 
     let store = TantivyStore::open_reader(&idx_dir).unwrap();
     let q_mod = Query::from_str("patched").unwrap();
@@ -81,10 +99,23 @@ fn test_index_lifecycle_flow() {
 
     // 4. Delete C.md
     fs::remove_file(wiki_root.join("C.md")).unwrap();
-    let existing2 = terminalwiki_index::store::load_index(&idx_dir).unwrap();
-    let updated_entries2 =
-        terminalwiki_index::indexer::update_index(&wiki, &config, existing2).unwrap();
-    terminalwiki_index::store::save_index(&idx_dir, &updated_entries2).unwrap();
+    let existing2 = terminalwiki_index::store::load_index(&idx_dir)
+        .unwrap()
+        .unwrap_or_default();
+    let delta2 = terminalwiki_index::indexer::compute_delta(&wiki, &config, &existing2).unwrap();
+    assert_eq!(delta2.deleted_doc_ids.len(), 1);
+
+    let mut tantivy_store = TantivyStore::open_or_create(&idx_dir).unwrap();
+    tantivy_store.apply_delta(&delta2).unwrap();
+
+    let mut new_states2 = delta2.unchanged;
+    for item in delta2.added {
+        new_states2.push(item.to_state());
+    }
+    for item in delta2.modified {
+        new_states2.push(item.to_state());
+    }
+    terminalwiki_index::store::save_state(&idx_dir, &new_states2).unwrap();
 
     let store2 = TantivyStore::open_reader(&idx_dir).unwrap();
     let q_del = Query::from_str("networking").unwrap();
@@ -97,10 +128,24 @@ fn test_index_lifecycle_flow() {
 
     // 5. Rename A.md -> X.md
     fs::rename(wiki_root.join("A.md"), wiki_root.join("X.md")).unwrap();
-    let existing3 = terminalwiki_index::store::load_index(&idx_dir).unwrap();
-    let updated_entries3 =
-        terminalwiki_index::indexer::update_index(&wiki, &config, existing3).unwrap();
-    terminalwiki_index::store::save_index(&idx_dir, &updated_entries3).unwrap();
+    let existing3 = terminalwiki_index::store::load_index(&idx_dir)
+        .unwrap()
+        .unwrap_or_default();
+    let delta3 = terminalwiki_index::indexer::compute_delta(&wiki, &config, &existing3).unwrap();
+    assert_eq!(delta3.deleted_doc_ids.len(), 1);
+    assert_eq!(delta3.added.len(), 1);
+
+    let mut tantivy_store = TantivyStore::open_or_create(&idx_dir).unwrap();
+    tantivy_store.apply_delta(&delta3).unwrap();
+
+    let mut new_states3 = delta3.unchanged;
+    for item in delta3.added {
+        new_states3.push(item.to_state());
+    }
+    for item in delta3.modified {
+        new_states3.push(item.to_state());
+    }
+    terminalwiki_index::store::save_state(&idx_dir, &new_states3).unwrap();
 
     let store3 = TantivyStore::open_reader(&idx_dir).unwrap();
     let q_ren = Query::from_str("allocation").unwrap();
@@ -127,8 +172,12 @@ fn test_search_is_strictly_read_only() {
     let config = Config::default();
 
     fs::write(wiki_root.join("doc.md"), "# Document\nRead only test.\n").unwrap();
-    let entries = terminalwiki_index::indexer::update_index(&wiki, &config, None).unwrap();
-    terminalwiki_index::store::save_index(&idx_dir, &entries).unwrap();
+    let raw_entries = terminalwiki_index::indexer::build_all(&wiki, &config).unwrap();
+    let mut tantivy_store = TantivyStore::open_or_create(&idx_dir).unwrap();
+    tantivy_store.rebuild_all(&raw_entries).unwrap();
+    let states: Vec<terminalwiki_index::DocumentState> =
+        raw_entries.into_iter().map(|e| e.to_state()).collect();
+    terminalwiki_index::store::save_state(&idx_dir, &states).unwrap();
 
     let meta_before = fs::read_to_string(idx_dir.join("state.json")).unwrap();
 
@@ -201,7 +250,6 @@ fn test_code_rendering_exact_whitespace() {
     );
 
     assert!(doc.lines.len() >= 4); // Header + rule + 4 code lines
-                                   // Check line 2 (let x = 1) has tab expanded to 4 spaces
     let line_text: String = doc.lines[3].iter().map(|s| s.text.as_str()).collect();
     assert!(line_text.contains("    let x = 1;"));
 }

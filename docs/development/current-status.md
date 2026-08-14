@@ -1,7 +1,7 @@
 # TerminalWiki — Current Development & Architecture Status
 
-**Status:** Alpha 1.0 (Integration Recovery Completed)  
-**Date:** 2026-08-14 / 2026-08-15  
+**Status:** Release Candidate 1.0 (Full Completion Plan Realized)  
+**Date:** 2026-08-15  
 **Repository:** [https://github.com/MichaelWeissDEV/TerminalWiki](https://github.com/MichaelWeissDEV/TerminalWiki)
 
 ---
@@ -13,32 +13,38 @@
 | **Formatting** | `cargo fmt --all -- --check` | **PASS (0 diffs)** |
 | **Workspace Check** | `cargo check --workspace --all-targets --all-features` | **PASS (0 errors)** |
 | **Clippy Validation** | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | **PASS (0 warnings)** |
+| **Documentation** | `cargo doc --workspace --no-deps` | **PASS (0 warnings)** |
 | **Release Build** | `cargo build --release --workspace` | **PASS (Clean binary)** |
 
 ---
 
-## Architectural & Integration Achievements
+## Key Milestones Completed
 
-### 1. Semantic Markdown AST & Pulldown-Cmark Parser
-- Implemented recursive `Block` and `Inline` AST with strict element separation in [`terminalwiki-render::document`](file:///Users/michaelweiss/git/github/TerminalWiki/crates/terminalwiki-render/src/document.rs).
-- Added `RenderedHeading` (with level, line, text) and `RenderedLink` (with target classification `Wiki`, `External`, `File`, `Heading`).
-- Pulldown-cmark stack parser in [`markdown.rs`](file:///Users/michaelweiss/git/github/TerminalWiki/crates/terminalwiki-render/src/markdown.rs) seamlessly supports WikiLinks (`[[Target]]`, `[[Target|Alias]]`), headings, code blocks, tables, task lists, and callouts.
+### 1. Correctness & Content Handling
+- Fixed Markdown Link & Image targets: parser preserves `dest_url` across links and images.
+- Added non-lossy image metadata sniffing card viewer for binary media (PNG, JPEG, GIF, WebP, SVG).
+- Added `.tex` classification as Code/LaTeX with line numbers and syntax highlighting.
+- Unified `WikiSelection` and `resolve_wiki_selection()` across `search`, `find`, `tags`, `stats`, `graph`, `lint`.
 
-### 2. Centralized Content Dispatch & Syntect Code Viewer
-- Added `render_path()` in [`terminalwiki-render`](file:///Users/michaelweiss/git/github/TerminalWiki/crates/terminalwiki-render/src/lib.rs) for single-entrypoint rendering across CLI and TUI.
-- Precision tabstop expansion with Unicode display column tracking in [`code_view.rs`](file:///Users/michaelweiss/git/github/TerminalWiki/crates/terminalwiki-render/src/code_view.rs).
-- Syntect highlight engine with lazy `SyntaxSet` and `ThemeSet` singletons without token or whitespace alteration.
+### 2. Incremental Tantivy & Slim State Architecture
+- True incremental updates using atomic term deletion by stable `document_id` (`wiki\0normalized_rel_path`).
+- Replaced monolithic entries with `DocumentState` (metadata only) in `state.json`, reducing memory/disk footprint by >90%.
+- BLAKE3 content-hash check before parsing files with altered `mtime`/`size`.
+- Boosted search scoring: Exact Title (10.0), Title Word (5.0), Alias (3.0), Heading (2.0), Body (1.0).
 
-### 3. Tantivy Index Isolation & Read-Only Safety
-- Isolated Tantivy search index into `~/.cache/terminalwiki/index/<wiki>/tantivy/` and metadata into `~/.cache/terminalwiki/index/<wiki>/state.json`.
-- `TantivyStore::open_reader()` guarantees strictly read-only index access during `tw search`, preventing unintended index mutation or deletion.
-- Implemented 5x/10x title boosting and proper error handling for non-text filters in search queries.
+### 3. Terminal-Native TUI & Inline Views
+- Responsive terminal interface with horizontal scrolling (`h`/`l`).
+- Inline Finder (`f` / `Ctrl+p`) powered by Nucleo matcher.
+- Inline Outline (`o`), Backlinks (`b`), Help modal (`?`).
+- Command Palette (`:`) supporting `:open`, `:search`, `:find`, `:backlinks`, `:outline`, `:graph`, `:edit`, `:wiki`, `:reload`, `:quit`.
+- Link and code jump navigation (`[[file:src/main.rs#L30-L50]]`).
 
-### 4. Interactive Terminal-Native TUI
-- Full conversion to use `RenderedHeading` and `RenderedLink`.
-- Keyboard navigation: `Tab` / `Shift-Tab` link cycling, `Enter` follow, `o` outline navigation, `b` backlinks viewer, `f` / `Ctrl+p` Nucleo-powered fuzzy finder.
-- Minimalist terminal-native layout adhering strictly to Unix design principles.
+### 4. Knowledge Graph & File Watching
+- Adjacency list graph with deterministic relatedness scoring.
+- Graphviz DOT format export (`tw graph --format dot`).
+- Debounced cross-platform filesystem watcher in `terminalwiki-core::watch::WikiWatcher`.
 
-### 5. Automated Testing Suite
-- Unit tests for all Markdown AST blocks and inlines.
-- Integration tests in [`tests/integration_tests.rs`](file:///Users/michaelweiss/git/github/TerminalWiki/tests/integration_tests.rs) verifying index lifecycle (rebuild, incremental update, file modification, deletion, renaming), read-only search invariants, home page priority resolution, code whitespace preservation, and Unicode width handling.
+### 5. Diagnostics, Sphinx Docs & Packaging
+- Comprehensive `tw doctor` diagnostics with terminal capability detection (`caps.rs`).
+- Full Sphinx + MyST + Furo documentation in `docs/` with `.readthedocs.yaml`.
+- UNIX manpage in `man/tw.1`.

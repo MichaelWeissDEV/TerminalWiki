@@ -5,6 +5,7 @@ pub mod binary;
 pub mod code_view;
 pub mod document;
 pub mod highlight;
+pub mod image_view;
 pub mod markdown;
 pub mod math;
 pub mod plain;
@@ -19,6 +20,7 @@ pub use document::{
     Block, Document, Inline, LinkTarget, RenderedDocument, RenderedHeading, RenderedLine,
     RenderedLink, Span,
 };
+pub use image_view::render_image_info;
 pub use markdown::parse_markdown;
 pub use math::MathRenderer;
 pub use plain::PlainRenderer;
@@ -72,12 +74,13 @@ pub fn render_path(
                 .unwrap_or(0);
             render_binary_info(path, len, mtime)
         }
-        ContentType::Code => {
+        ContentType::Image => render_image_info(path, bytes, theme),
+        ContentType::Code | ContentType::Latex => {
             let text = String::from_utf8_lossy(bytes);
             let lang = terminalwiki_core::filetype::language_for(path);
             render_code_file(&text, lang, path, config, theme, color_mode, None)
         }
-        ContentType::Markdown | ContentType::Text | ContentType::Latex | ContentType::Image => {
+        ContentType::Markdown | ContentType::Text => {
             let text = String::from_utf8_lossy(bytes);
             render_markdown(&text, config, theme, color_mode)
         }

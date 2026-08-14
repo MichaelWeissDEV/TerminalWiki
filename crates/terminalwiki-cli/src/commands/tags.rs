@@ -1,21 +1,29 @@
 //! `tw tags [WIKI]` and `tw tag TAG` — list and filter by tags (spec §14).
 
+use std::collections::BTreeMap;
+
 use terminalwiki_core::sanitize::sanitize_line;
 use terminalwiki_core::wiki::WikiSet;
-use terminalwiki_core::{Config, Error, Result};
+use terminalwiki_core::{Config, Result};
 
 use crate::args::Args;
+use crate::commands::wiki_selection::resolve_wiki_selection;
 
 /// `tw tags` — list all tags and their page counts.
-pub fn tags(_wiki: Option<String>, _args: Args, _config: Config, wikis: WikiSet) -> Result<()> {
-    if wikis.is_empty() {
-        return Err(Error::NoWikiConfigured);
+pub fn tags(
+    wiki_opt: Option<String>,
+    mut args: Args,
+    _config: Config,
+    wikis: WikiSet,
+) -> Result<()> {
+    if wiki_opt.is_some() {
+        args.wiki = wiki_opt;
     }
+    let target_wikis = resolve_wiki_selection(&args, &wikis)?;
 
-    let mut all_tags: std::collections::BTreeMap<String, Vec<String>> =
-        std::collections::BTreeMap::new();
+    let mut all_tags: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
-    for wiki in wikis.iter() {
+    for wiki in target_wikis {
         if let Ok(idx) = terminalwiki_index::WikiIndex::load(&wiki.name) {
             for (tag, pages) in idx.tags() {
                 let entry = all_tags.entry(tag).or_default();
@@ -39,13 +47,11 @@ pub fn tags(_wiki: Option<String>, _args: Args, _config: Config, wikis: WikiSet)
 }
 
 /// `tw tag TAG` — list all pages with a given tag.
-pub fn tag(tag_query: String, _args: Args, _config: Config, wikis: WikiSet) -> Result<()> {
-    if wikis.is_empty() {
-        return Err(Error::NoWikiConfigured);
-    }
+pub fn tag(tag_query: String, args: Args, _config: Config, wikis: WikiSet) -> Result<()> {
+    let target_wikis = resolve_wiki_selection(&args, &wikis)?;
 
     let mut found = false;
-    for wiki in wikis.iter() {
+    for wiki in target_wikis {
         if let Ok(idx) = terminalwiki_index::WikiIndex::load(&wiki.name) {
             for (tag, pages) in idx.tags() {
                 if tag.eq_ignore_ascii_case(&tag_query) {

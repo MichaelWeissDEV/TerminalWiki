@@ -1,6 +1,7 @@
 //! Semantic Document AST and Rendered Document types (spec §55, §56).
 
 use crate::ansi::Style;
+use std::path::PathBuf;
 
 pub type RenderedLine = Vec<Span>;
 
@@ -11,12 +12,19 @@ pub struct Span {
     pub style: Style,
 }
 
-/// Target type of a rendered link.
+/// Target type of a rendered link (spec §32, §34).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LinkTarget {
-    Wiki(String),
+    Wiki {
+        wiki: Option<String>,
+        page: String,
+        anchor: Option<String>,
+    },
+    File {
+        path: PathBuf,
+        line_range: Option<(usize, usize)>,
+    },
     External(String),
-    File(String),
     Heading(String),
 }
 
@@ -69,17 +77,17 @@ pub enum Inline {
 impl Inline {
     pub fn plain_text(&self) -> String {
         match self {
-            Inline::Text(s) | Inline::Code(s) | Inline::Footnote(s) | Inline::Math(s) => s.clone(),
-            Inline::Bold(inlines) | Inline::Italic(inlines) | Inline::Strike(inlines) => {
-                inlines.iter().map(|i| i.plain_text()).collect()
-            }
-            Inline::Link { text, .. } => text.iter().map(|i| i.plain_text()).collect(),
+            Inline::Text(t) | Inline::Code(t) | Inline::Footnote(t) | Inline::Math(t) => t.clone(),
+            Inline::Bold(inner)
+            | Inline::Italic(inner)
+            | Inline::Strike(inner)
+            | Inline::Link { text: inner, .. } => inner.iter().map(|i| i.plain_text()).collect(),
             Inline::WikiLink { target, label } => label.clone().unwrap_or_else(|| target.clone()),
         }
     }
 }
 
-/// Block elements representing top-level document structure.
+/// Block-level formatting elements.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Block {
     Heading(usize, Vec<Inline>),
@@ -90,7 +98,7 @@ pub enum Block {
     },
     List {
         ordered: bool,
-        start: Option<u64>,
+        start: u64,
         items: Vec<Vec<Block>>,
     },
     TaskItem {
@@ -98,11 +106,6 @@ pub enum Block {
         content: Vec<Inline>,
     },
     BlockQuote(Vec<Block>),
-    Callout {
-        kind: String,
-        title: Option<String>,
-        content: Vec<Block>,
-    },
     Table {
         headers: Vec<Vec<Inline>>,
         rows: Vec<Vec<Vec<Inline>>>,
@@ -112,10 +115,15 @@ pub enum Block {
         alt: String,
         url: String,
     },
+    Callout {
+        kind: String,
+        title: Option<String>,
+        content: Vec<Block>,
+    },
     Math(String),
 }
 
-/// Semantic Document model.
+/// A parsed document represented as a list of blocks.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Document {
     pub blocks: Vec<Block>,

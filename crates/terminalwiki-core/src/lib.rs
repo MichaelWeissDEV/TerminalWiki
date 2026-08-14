@@ -5,6 +5,7 @@
 //! disk. No proprietary database is required to read or edit a knowledge base,
 //! and deleting every cache TerminalWiki owns must lose exactly nothing.
 
+pub mod caps;
 pub mod config;
 pub mod error;
 pub mod filetype;
@@ -16,6 +17,7 @@ pub mod resolve;
 pub mod sanitize;
 pub mod scan;
 pub mod unicode;
+pub mod watch;
 pub mod wiki;
 
 pub use config::{Config, Theme};

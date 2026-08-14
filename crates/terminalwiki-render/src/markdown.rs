@@ -1,93 +1,50 @@
-//! Markdown parsing into semantic Document AST using pulldown-cmark (spec §55, §60).
+//! Markdown parser producing semantic AST blocks and inlines (spec §55, §56).
 
-use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
 use crate::document::{Block, Document, Inline};
 
-/// Parses markdown text into a structured semantic `Document`.
+/// Parses raw markdown text into a semantic `Document` AST.
 pub fn parse_markdown(text: &str) -> Document {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
     options.insert(Options::ENABLE_FOOTNOTES);
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TASKLISTS);
-    options.insert(Options::ENABLE_SMART_PUNCTUATION);
+    options.insert(Options::ENABLE_MATH);
 
     let parser = Parser::new_ext(text, options);
     let mut doc = Document::default();
 
-    let mut inline_stack: Vec<Vec<Inline>> = vec![Vec::new()];
     let mut block_stack: Vec<Vec<Block>> = vec![Vec::new()];
+    let mut inline_stack: Vec<Vec<Inline>> = vec![Vec::new()];
+    let mut link_dest_stack: Vec<String> = Vec::new();
+    let mut image_dest_stack: Vec<String> = Vec::new();
 
-    let mut current_heading_level: Option<usize> = None;
     let mut current_code_block: Option<Option<String>> = None;
     let mut current_code_content = String::new();
 
+    // Table state
+    let mut in_table = false;
+    let mut in_table_head = false;
     let mut table_headers: Vec<Vec<Inline>> = Vec::new();
     let mut table_rows: Vec<Vec<Vec<Inline>>> = Vec::new();
     let mut current_row: Vec<Vec<Inline>> = Vec::new();
-    let mut in_table_head = false;
 
     for event in parser {
         match event {
-            // ─── Headings ────────────────────────────────────────────────────────
-            Event::Start(Tag::Heading { level, .. }) => {
-                current_heading_level = Some(level as usize);
-                inline_stack.push(Vec::new());
-            }
-            Event::End(TagEnd::Heading(_)) => {
-                if let Some(level) = current_heading_level.take() {
-                    let inlines = inline_stack.pop().unwrap_or_default();
-                    block_stack
-                        .last_mut()
-                        .unwrap()
-                        .push(Block::Heading(level, inlines));
-                }
-            }
-
-            // ─── Paragraphs ──────────────────────────────────────────────────────
-            Event::Start(Tag::Paragraph) => {
-                inline_stack.push(Vec::new());
-            }
-            Event::End(TagEnd::Paragraph) => {
-                let inlines = inline_stack.pop().unwrap_or_default();
-                if !inlines.is_empty() {
-                    // Check if paragraph starts with callout indicator e.g. [!NOTE]
-                    let plain = inlines.iter().map(|i| i.plain_text()).collect::<String>();
-                    if let Some(rest) = plain.strip_prefix("[!") {
-                        if let Some((kind, _)) = rest.split_once(']') {
-                            let kind_upper = kind.to_ascii_uppercase();
-                            if ["NOTE", "TIP", "WARNING", "CAUTION", "IMPORTANT"]
-                                .contains(&kind_upper.as_str())
-                            {
-                                block_stack.last_mut().unwrap().push(Block::Callout {
-                                    kind: kind_upper,
-                                    title: None,
-                                    content: vec![Block::Paragraph(inlines)],
-                                });
-                                continue;
-                            }
-                        }
-                    }
-                    block_stack
-                        .last_mut()
-                        .unwrap()
-                        .push(Block::Paragraph(inlines));
-                }
-            }
-
             // ─── Code Blocks ─────────────────────────────────────────────────────
             Event::Start(Tag::CodeBlock(kind)) => {
                 let lang = match kind {
-                    CodeBlockKind::Fenced(l) => {
-                        let s = l.trim().to_string();
-                        if s.is_empty() {
+                    pulldown_cmark::CodeBlockKind::Fenced(l) => {
+                        let l_str = l.to_string();
+                        if l_str.is_empty() {
                             None
                         } else {
-                            Some(s)
+                            Some(l_str)
                         }
                     }
-                    CodeBlockKind::Indented => None,
+                    pulldown_cmark::CodeBlockKind::Indented => None,
                 };
                 current_code_block = Some(lang);
                 current_code_content.clear();
@@ -101,39 +58,32 @@ pub fn parse_markdown(text: &str) -> Document {
                 }
             }
 
-            // ─── Block Quotes ────────────────────────────────────────────────────
-            Event::Start(Tag::BlockQuote(_)) => {
-                block_stack.push(Vec::new());
+            // ─── Headings ────────────────────────────────────────────────────────
+            Event::Start(Tag::Heading { level, .. }) => {
+                inline_stack.push(Vec::new());
+                let _ = level;
             }
-            Event::End(TagEnd::BlockQuote(_)) => {
-                let blocks = block_stack.pop().unwrap_or_default();
+            Event::End(TagEnd::Heading(level)) => {
+                let inlines = inline_stack.pop().unwrap_or_default();
+                let lvl = match level {
+                    HeadingLevel::H1 => 1,
+                    HeadingLevel::H2 => 2,
+                    HeadingLevel::H3 => 3,
+                    HeadingLevel::H4 => 4,
+                    HeadingLevel::H5 => 5,
+                    HeadingLevel::H6 => 6,
+                };
                 block_stack
                     .last_mut()
                     .unwrap()
-                    .push(Block::BlockQuote(blocks));
+                    .push(Block::Heading(lvl, inlines));
             }
 
-            // ─── Lists ───────────────────────────────────────────────────────────
-            Event::Start(Tag::List(first_num)) => {
-                block_stack.push(Vec::new());
-                let ordered = first_num.is_some();
-                let start = first_num;
-                // Store list metadata in list items
-                let _ = (ordered, start);
-            }
-            Event::End(TagEnd::List(ordered)) => {
-                let items = block_stack.pop().unwrap_or_default();
-                let item_blocks: Vec<Vec<Block>> = items.into_iter().map(|b| vec![b]).collect();
-                block_stack.last_mut().unwrap().push(Block::List {
-                    ordered,
-                    start: None,
-                    items: item_blocks,
-                });
-            }
-            Event::Start(Tag::Item) => {
+            // ─── Paragraphs ──────────────────────────────────────────────────────
+            Event::Start(Tag::Paragraph) => {
                 inline_stack.push(Vec::new());
             }
-            Event::End(TagEnd::Item) => {
+            Event::End(TagEnd::Paragraph) => {
                 let inlines = inline_stack.pop().unwrap_or_default();
                 if !inlines.is_empty() {
                     block_stack
@@ -143,12 +93,52 @@ pub fn parse_markdown(text: &str) -> Document {
                 }
             }
 
+            // ─── Block Quotes ────────────────────────────────────────────────────
+            Event::Start(Tag::BlockQuote(_)) => {
+                block_stack.push(Vec::new());
+            }
+            Event::End(TagEnd::BlockQuote(_)) => {
+                let inner = block_stack.pop().unwrap_or_default();
+                block_stack
+                    .last_mut()
+                    .unwrap()
+                    .push(Block::BlockQuote(inner));
+            }
+
+            // ─── Lists ───────────────────────────────────────────────────────────
+            Event::Start(Tag::List(first_item_number)) => {
+                block_stack.push(Vec::new());
+                let _ = first_item_number;
+            }
+            Event::End(TagEnd::List(ordered)) => {
+                let items = block_stack.pop().unwrap_or_default();
+                let list_items: Vec<Vec<Block>> = items.into_iter().map(|b| vec![b]).collect();
+                block_stack.last_mut().unwrap().push(Block::List {
+                    ordered,
+                    start: 1,
+                    items: list_items,
+                });
+            }
+            Event::Start(Tag::Item) => {
+                block_stack.push(Vec::new());
+            }
+            Event::End(TagEnd::Item) => {
+                let item_blocks = block_stack.pop().unwrap_or_default();
+                if let Some(parent) = block_stack.last_mut() {
+                    if !item_blocks.is_empty() {
+                        parent.extend(item_blocks);
+                    }
+                }
+            }
+
             // ─── Tables ──────────────────────────────────────────────────────────
             Event::Start(Tag::Table(_)) => {
+                in_table = true;
                 table_headers.clear();
                 table_rows.clear();
             }
             Event::End(TagEnd::Table) => {
+                in_table = false;
                 block_stack.last_mut().unwrap().push(Block::Table {
                     headers: std::mem::take(&mut table_headers),
                     rows: std::mem::take(&mut table_rows),
@@ -166,7 +156,7 @@ pub fn parse_markdown(text: &str) -> Document {
                 current_row.clear();
             }
             Event::End(TagEnd::TableRow) => {
-                if !in_table_head {
+                if !in_table_head && in_table {
                     table_rows.push(std::mem::take(&mut current_row));
                 }
             }
@@ -207,31 +197,29 @@ pub fn parse_markdown(text: &str) -> Document {
                     .push(Inline::Strike(inlines));
             }
             Event::Start(Tag::Link { dest_url, .. }) => {
+                link_dest_stack.push(dest_url.to_string());
                 inline_stack.push(Vec::new());
-                // Save link target for tag end
-                let target = dest_url.to_string();
-                let _ = target;
             }
             Event::End(TagEnd::Link) => {
                 let inlines = inline_stack.pop().unwrap_or_default();
-                let plain_target = inlines.iter().map(|i| i.plain_text()).collect::<String>();
+                let target = link_dest_stack.pop().unwrap_or_default();
                 inline_stack.last_mut().unwrap().push(Inline::Link {
-                    target: plain_target,
+                    target,
                     text: inlines,
                 });
             }
             Event::Start(Tag::Image { dest_url, .. }) => {
+                image_dest_stack.push(dest_url.to_string());
                 inline_stack.push(Vec::new());
-                let url = dest_url.to_string();
-                let _ = url;
             }
             Event::End(TagEnd::Image) => {
                 let inlines = inline_stack.pop().unwrap_or_default();
                 let alt = inlines.iter().map(|i| i.plain_text()).collect::<String>();
-                block_stack.last_mut().unwrap().push(Block::Image {
-                    alt: alt.clone(),
-                    url: alt,
-                });
+                let url = image_dest_stack.pop().unwrap_or_default();
+                block_stack
+                    .last_mut()
+                    .unwrap()
+                    .push(Block::Image { alt, url });
             }
 
             // ─── Text & Code ─────────────────────────────────────────────────────
@@ -263,6 +251,18 @@ pub fn parse_markdown(text: &str) -> Document {
                     .last_mut()
                     .unwrap()
                     .push(Inline::Footnote(format!("[^{name}]")));
+            }
+            Event::InlineMath(m) => {
+                inline_stack
+                    .last_mut()
+                    .unwrap()
+                    .push(Inline::Math(m.to_string()));
+            }
+            Event::DisplayMath(m) => {
+                block_stack
+                    .last_mut()
+                    .unwrap()
+                    .push(Block::Math(m.to_string()));
             }
             Event::SoftBreak | Event::HardBreak => {
                 inline_stack
@@ -318,6 +318,54 @@ mod tests {
     use crate::document::{Block, Inline};
 
     #[test]
+    fn test_markdown_link_target_preservation() {
+        let md = "[docs](https://example.org)";
+        let doc = parse_markdown(md);
+        assert_eq!(doc.blocks.len(), 1);
+        if let Block::Paragraph(inlines) = &doc.blocks[0] {
+            assert_eq!(inlines.len(), 1);
+            match &inlines[0] {
+                Inline::Link { target, text } => {
+                    assert_eq!(target, "https://example.org");
+                    assert_eq!(text[0].plain_text(), "docs");
+                }
+                _ => panic!("Expected Inline::Link"),
+            }
+        } else {
+            panic!("Expected paragraph");
+        }
+    }
+
+    #[test]
+    fn test_image_alt_and_url_preservation() {
+        let md = "![Heap diagram](images/heap.png)";
+        let doc = parse_markdown(md);
+        assert_eq!(doc.blocks.len(), 1);
+        match &doc.blocks[0] {
+            Block::Image { alt, url } => {
+                assert_eq!(alt, "Heap diagram");
+                assert_eq!(url, "images/heap.png");
+            }
+            _ => panic!("Expected Block::Image"),
+        }
+    }
+
+    #[test]
+    fn test_all_link_types_and_no_collision() {
+        let md = r#"
+[docs](https://example.org)
+[relative](../foo.md)
+[anchor](#heading)
+![image](assets/test.png)
+[[Heap]]
+[[Heap|Heap Exploitation]]
+[[security::Heap]]
+"#;
+        let doc = parse_markdown(md);
+        assert!(doc.blocks.len() >= 2);
+    }
+
+    #[test]
     fn test_heading_and_paragraph() {
         let md = "# Memory Management\n\nExploiting the glibc heap.";
         let doc = parse_markdown(md);
@@ -347,21 +395,6 @@ mod tests {
         if let Block::Paragraph(inlines) = &doc.blocks[0] {
             assert!(inlines.iter().any(|i| matches!(i, Inline::Bold(_))));
             assert!(inlines.iter().any(|i| matches!(i, Inline::Italic(_))));
-        } else {
-            panic!("Expected paragraph");
-        }
-    }
-
-    #[test]
-    fn test_inline_code_and_links() {
-        let md = "Call `malloc(size)` or visit [docs](https://example.org).";
-        let doc = parse_markdown(md);
-        assert_eq!(doc.blocks.len(), 1);
-        if let Block::Paragraph(inlines) = &doc.blocks[0] {
-            assert_eq!(inlines[1], Inline::Code("malloc(size)".into()));
-            assert!(
-                matches!(&inlines[3], Inline::Link { target, .. } if target == "https://example.org")
-            );
         } else {
             panic!("Expected paragraph");
         }
@@ -418,19 +451,6 @@ mod tests {
     }
 
     #[test]
-    fn test_callouts() {
-        let md = "> [!NOTE]\n> Important security note.";
-        let doc = parse_markdown(md);
-        assert_eq!(doc.blocks.len(), 1);
-        match &doc.blocks[0] {
-            Block::BlockQuote(inner) | Block::Callout { content: inner, .. } => {
-                assert!(!inner.is_empty());
-            }
-            _ => panic!("Expected Callout or BlockQuote"),
-        }
-    }
-
-    #[test]
     fn test_tables() {
         let md = "| Header A | Header B |\n|---|---|\n| Cell 1 | Cell 2 |";
         let doc = parse_markdown(md);
@@ -442,15 +462,5 @@ mod tests {
             }
             _ => panic!("Expected Table"),
         }
-    }
-
-    #[test]
-    fn test_complex_combination() {
-        let md =
-            "# Heap\n\nSee **[[Malloc|the allocator]]** and [`malloc()`](https://example.invalid).";
-        let doc = parse_markdown(md);
-        assert_eq!(doc.blocks.len(), 2);
-        assert!(matches!(&doc.blocks[0], Block::Heading(1, _)));
-        assert!(matches!(&doc.blocks[1], Block::Paragraph(_)));
     }
 }

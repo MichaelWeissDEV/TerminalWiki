@@ -174,7 +174,7 @@ impl<'a> Renderer<'a> {
             } => {
                 for (i, item) in items.iter().enumerate() {
                     let marker = if *ordered {
-                        let num = start.unwrap_or(1) + i as u64;
+                        let num = start + i as u64;
                         format!("{indent}{num}. ")
                     } else {
                         format!("{indent}• ")
@@ -279,11 +279,24 @@ impl<'a> Renderer<'a> {
                 Inline::Link { target, text } => {
                     let line_no = rdoc.lines.len();
                     let label = text.iter().map(|i| i.plain_text()).collect::<String>();
+                    let link_target = if let Some(anchor) = target.strip_prefix('#') {
+                        LinkTarget::Heading(anchor.to_string())
+                    } else if target.starts_with("http://")
+                        || target.starts_with("https://")
+                        || target.starts_with("mailto:")
+                    {
+                        LinkTarget::External(target.clone())
+                    } else {
+                        LinkTarget::File {
+                            path: std::path::PathBuf::from(target),
+                            line_range: None,
+                        }
+                    };
                     rdoc.links.push(RenderedLink {
                         line: line_no,
                         start_column: 0,
                         end_column: display_width(&label),
-                        target: LinkTarget::External(target.clone()),
+                        target: link_target,
                         label: label.clone(),
                     });
                     for mut s in self.render_inlines(text, rdoc) {
@@ -293,14 +306,54 @@ impl<'a> Renderer<'a> {
                 }
                 Inline::WikiLink { target, label } => {
                     let line_no = rdoc.lines.len();
-                    let display_text = label.as_deref().unwrap_or(target.as_str());
+                    let parsed = terminalwiki_core::link::WikiLink::parse_inner(target);
+                    let (display_text, link_target) = match parsed {
+                        Some(wl) => {
+                            let dt = label.clone().unwrap_or_else(|| wl.display_text());
+                            let lt = match wl.target {
+                                terminalwiki_core::link::LinkTarget::Page {
+                                    wiki,
+                                    name,
+                                    anchor,
+                                } => LinkTarget::Wiki {
+                                    wiki,
+                                    page: name,
+                                    anchor,
+                                },
+                                terminalwiki_core::link::LinkTarget::File {
+                                    path, lines, ..
+                                } => LinkTarget::File {
+                                    path: std::path::PathBuf::from(path),
+                                    line_range: lines.map(|l| (l.start as usize, l.end as usize)),
+                                },
+                                terminalwiki_core::link::LinkTarget::Symbol { name } => {
+                                    LinkTarget::Wiki {
+                                        wiki: None,
+                                        page: name,
+                                        anchor: None,
+                                    }
+                                }
+                            };
+                            (dt, lt)
+                        }
+                        None => (
+                            label.clone().unwrap_or_else(|| target.clone()),
+                            LinkTarget::Wiki {
+                                wiki: None,
+                                page: target.clone(),
+                                anchor: None,
+                            },
+                        ),
+                    };
+
                     let full_display = format!("[[{display_text}]]");
+
                     rdoc.links.push(RenderedLink {
                         line: line_no,
                         start_column: 0,
                         end_column: display_width(&full_display),
-                        target: LinkTarget::Wiki(target.clone()),
-                        label: display_text.to_string(),
+                        target: link_target,
+                        label: display_text,
                     });
                     spans.push(Span {
                         text: full_display,

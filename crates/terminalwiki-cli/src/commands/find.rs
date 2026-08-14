@@ -6,6 +6,7 @@ use terminalwiki_core::wiki::WikiSet;
 use terminalwiki_core::{Config, Error, Result};
 
 use crate::args::Args;
+use crate::commands::wiki_selection::resolve_wiki_selection;
 
 #[derive(Serialize)]
 struct FuzzyJsonOutput {
@@ -22,22 +23,17 @@ struct FuzzyResultJsonItem {
 }
 
 pub fn find(query: String, args: Args, _config: Config, wikis: WikiSet) -> Result<()> {
-    if wikis.is_empty() {
-        return Err(Error::NoWikiConfigured);
-    }
+    let target_wikis = resolve_wiki_selection(&args, &wikis)?;
 
     let mut json_results = Vec::new();
     let mut all_hits = Vec::new();
 
-    for wiki in wikis.iter() {
+    for wiki in target_wikis {
         if let Ok(idx) = terminalwiki_index::WikiIndex::load(&wiki.name) {
             let hits = idx.find(&query, 20);
             for hit in hits {
                 all_hits.push(hit);
             }
-        }
-        if !args.all {
-            break;
         }
     }
 
@@ -58,9 +54,9 @@ pub fn find(query: String, args: Args, _config: Config, wikis: WikiSet) -> Resul
             query: query.clone(),
             results: json_results,
         };
-        if let Ok(json_str) = serde_json::to_string_pretty(&output) {
-            println!("{json_str}");
-        }
+        let json_str = serde_json::to_string_pretty(&output)
+            .map_err(|e| Error::other(format!("JSON error: {e}")))?;
+        println!("{json_str}");
         return Ok(());
     }
 

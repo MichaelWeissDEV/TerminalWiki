@@ -1,4 +1,4 @@
-//! TUI Application state and business logic (spec §49-§56).
+//! TUI Application state and business logic (spec §40-§53).
 
 use std::fs;
 use std::path::PathBuf;
@@ -20,6 +20,7 @@ pub enum Mode {
     Outline,
     InPageSearch,
     Backlinks,
+    Command,
     Help,
 }
 
@@ -37,26 +38,32 @@ pub struct App<'a> {
     pub links: Vec<RenderedLink>,
     pub raw_content: String,
     pub scroll: usize,
+    pub h_scroll: usize,
 
-    pub history_back: Vec<(String, PathBuf, usize)>,
-    pub history_forward: Vec<(String, PathBuf, usize)>,
+    pub history_back: Vec<(String, PathBuf, usize, usize)>,
+    pub history_forward: Vec<(String, PathBuf, usize, usize)>,
 
     pub selected_link_idx: Option<usize>,
 
     pub mode: Mode,
 
-    // Finder (Nucleo-powered)
+    // Finder (Nucleo-powered inline view)
     pub finder_query: String,
     pub fuzzy_dataset: FuzzyDataset,
     pub finder_filtered: Vec<FuzzyHit>,
     pub finder_selected: usize,
 
-    // Outline
+    // Outline (inline view)
     pub outline_selected: usize,
 
-    // Backlinks
+    // Backlinks (inline view)
     pub backlinks: Vec<BacklinkInfo>,
     pub backlinks_selected: usize,
+
+    // Command Palette (':')
+    pub command_input: String,
+    pub command_suggestions: Vec<String>,
+    pub command_selected: usize,
 
     // In-page search
     pub in_page_query: String,
@@ -66,6 +73,19 @@ pub struct App<'a> {
     pub should_quit: bool,
     pub should_suspend_for_editor: Option<PathBuf>,
 }
+
+const COMMAND_LIST: &[&str] = &[
+    "open",
+    "search",
+    "find",
+    "backlinks",
+    "outline",
+    "graph",
+    "edit",
+    "wiki",
+    "reload",
+    "quit",
+];
 
 impl<'a> App<'a> {
     pub fn new(
@@ -85,7 +105,7 @@ impl<'a> App<'a> {
             .or_else(|| wikis.default_wiki().map(|w| w.name.clone()))
             .ok_or(Error::NoWikiConfigured)?;
 
-        // Build Nucleo fuzzy dataset from index or file scan
+        // Build Nucleo fuzzy dataset from index state
         let mut fuzzy_items = Vec::new();
         for wiki in wikis.iter() {
             if let Ok(idx) = terminalwiki_index::WikiIndex::load(&wiki.name) {
@@ -136,6 +156,7 @@ impl<'a> App<'a> {
             links: Vec::new(),
             raw_content: String::new(),
             scroll: 0,
+            h_scroll: 0,
             history_back: Vec::new(),
             history_forward: Vec::new(),
             selected_link_idx: None,
@@ -147,6 +168,9 @@ impl<'a> App<'a> {
             outline_selected: 0,
             backlinks: Vec::new(),
             backlinks_selected: 0,
+            command_input: String::new(),
+            command_suggestions: Vec::new(),
+            command_selected: 0,
             in_page_query: String::new(),
             search_matches: Vec::new(),
             status_message: None,
@@ -170,13 +194,12 @@ impl<'a> App<'a> {
     pub fn load_home(&mut self, wiki_name: &str) -> Result<()> {
         let wiki = self.wikis.require(wiki_name)?;
 
-        // Phase 11: strict home_page() usage
         if let Some(home_path) = wiki.home_page() {
             let path_str = home_path.to_string_lossy().into_owned();
             return self.load_page(wiki_name, &path_str, false);
         }
 
-        // Phase 12: Virtual Home Overview
+        // Virtual Home Overview
         let mut overview = format!(
             "# {}\n\n*Knowledge base overview*\n\n## Pages\n\n",
             wiki.name
@@ -199,6 +222,7 @@ impl<'a> App<'a> {
         self.links = doc.links;
         self.raw_content = overview;
         self.scroll = 0;
+        self.h_scroll = 0;
         self.selected_link_idx = if !self.links.is_empty() {
             Some(0)
         } else {
@@ -221,6 +245,7 @@ impl<'a> App<'a> {
                 self.current_wiki.clone(),
                 self.current_path.clone(),
                 self.scroll,
+                self.h_scroll,
             ));
             self.history_forward.clear();
         }
@@ -228,7 +253,6 @@ impl<'a> App<'a> {
         let bytes = fs::read(&resolution.path).map_err(|e| Error::io(&resolution.path, e))?;
         let text = String::from_utf8_lossy(&bytes).into_owned();
 
-        // Phase 13: Centralized render_path dispatch
         let doc: RenderedDocument = render_path(
             &resolution.path,
             &bytes,
@@ -249,6 +273,7 @@ impl<'a> App<'a> {
         self.links = doc.links;
         self.raw_content = text;
         self.scroll = 0;
+        self.h_scroll = 0;
         self.selected_link_idx = if !self.links.is_empty() {
             Some(0)
         } else {
@@ -260,15 +285,17 @@ impl<'a> App<'a> {
     }
 
     pub fn go_back(&mut self) {
-        if let Some((wiki, path, scroll)) = self.history_back.pop() {
+        if let Some((wiki, path, scroll, h_scroll)) = self.history_back.pop() {
             self.history_forward.push((
                 self.current_wiki.clone(),
                 self.current_path.clone(),
                 self.scroll,
+                self.h_scroll,
             ));
             let path_str = path.to_string_lossy().into_owned();
             if self.load_page(&wiki, &path_str, false).is_ok() {
                 self.scroll = scroll;
+                self.h_scroll = h_scroll;
             }
         } else {
             self.status_message = Some("Already at oldest history entry".to_string());
@@ -276,15 +303,17 @@ impl<'a> App<'a> {
     }
 
     pub fn go_forward(&mut self) {
-        if let Some((wiki, path, scroll)) = self.history_forward.pop() {
+        if let Some((wiki, path, scroll, h_scroll)) = self.history_forward.pop() {
             self.history_back.push((
                 self.current_wiki.clone(),
                 self.current_path.clone(),
                 self.scroll,
+                self.h_scroll,
             ));
             let path_str = path.to_string_lossy().into_owned();
             if self.load_page(&wiki, &path_str, false).is_ok() {
                 self.scroll = scroll;
+                self.h_scroll = h_scroll;
             }
         } else {
             self.status_message = Some("Already at newest history entry".to_string());
@@ -300,9 +329,91 @@ impl<'a> App<'a> {
         self.scroll = (self.scroll + amount).min(max_scroll);
     }
 
+    pub fn scroll_left(&mut self, amount: usize) {
+        self.h_scroll = self.h_scroll.saturating_sub(amount);
+    }
+
+    pub fn scroll_right(&mut self, amount: usize) {
+        self.h_scroll = self.h_scroll.saturating_add(amount);
+    }
+
     pub fn update_finder_filter(&mut self) {
         self.finder_filtered = self.fuzzy_dataset.find(&self.finder_query, 30);
         self.finder_selected = 0;
+    }
+
+    pub fn update_command_suggestions(&mut self) {
+        let trimmed = self.command_input.trim();
+        if trimmed.is_empty() {
+            self.command_suggestions = COMMAND_LIST.iter().map(|s| s.to_string()).collect();
+        } else {
+            self.command_suggestions = COMMAND_LIST
+                .iter()
+                .filter(|s| s.starts_with(trimmed))
+                .map(|s| s.to_string())
+                .collect();
+        }
+        self.command_selected = 0;
+    }
+
+    pub fn execute_command(&mut self) {
+        let cmd = self.command_input.trim().to_string();
+        let parts: Vec<&str> = cmd.split_whitespace().collect();
+        if parts.is_empty() {
+            return;
+        }
+
+        match parts[0] {
+            "q" | "quit" => self.should_quit = true,
+            "open" => {
+                if parts.len() > 1 {
+                    let page = parts[1..].join(" ");
+                    let _ = self.load_page(&self.current_wiki.clone(), &page, true);
+                }
+            }
+            "search" | "find" => {
+                if parts.len() > 1 {
+                    self.mode = Mode::Finder;
+                    self.finder_query = parts[1..].join(" ");
+                    self.update_finder_filter();
+                } else {
+                    self.mode = Mode::Finder;
+                    self.finder_query.clear();
+                    self.update_finder_filter();
+                }
+            }
+            "backlinks" => {
+                self.load_backlinks();
+                self.mode = Mode::Backlinks;
+            }
+            "outline" => {
+                if !self.headings.is_empty() {
+                    self.mode = Mode::Outline;
+                    self.outline_selected = 0;
+                } else {
+                    self.status_message = Some("No headings in current document".to_string());
+                }
+            }
+            "edit" => self.open_current_in_editor(),
+            "reload" => {
+                let p = self.current_path.to_string_lossy().into_owned();
+                let _ = self.load_page(&self.current_wiki.clone(), &p, false);
+                self.status_message = Some("Page reloaded".to_string());
+            }
+            "wiki" => {
+                if parts.len() > 1 {
+                    let target_wiki = parts[1];
+                    if self.wikis.get(target_wiki).is_some() {
+                        let _ = self.load_home(target_wiki);
+                    } else {
+                        self.status_message = Some(format!("Unknown wiki: {target_wiki}"));
+                    }
+                }
+            }
+            _ => {
+                self.status_message = Some(format!("Unknown command: {}", parts[0]));
+            }
+        }
     }
 
     pub fn load_backlinks(&mut self) {

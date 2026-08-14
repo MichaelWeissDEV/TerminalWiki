@@ -44,15 +44,7 @@ pub fn search(query: String, args: Args, _config: Config, wikis: WikiSet) -> Res
     let q = terminalwiki_index::Query::from_str(&query)
         .map_err(|e| Error::invalid_arguments(format!("Invalid search query: {e}")))?;
 
-    // Determine target wikis (Phase 31 & 32)
-    let target_wikis: Vec<&terminalwiki_core::wiki::Wiki> = if args.all {
-        wikis.iter().collect()
-    } else if let Some(ref w_name) = args.wiki {
-        vec![wikis.require(w_name)?]
-    } else {
-        let def = wikis.default_wiki().ok_or(Error::NoWikiConfigured)?;
-        vec![def]
-    };
+    let target_wikis = crate::commands::wiki_selection::resolve_wiki_selection(&args, &wikis)?;
 
     let mut json_results = Vec::new();
     let mut any_hits = false;

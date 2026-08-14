@@ -7,14 +7,12 @@ use terminalwiki_core::{Config, Error, Result};
 
 use crate::args::Args;
 
-pub fn lint(_args: Args, config: Config, wikis: WikiSet) -> Result<()> {
-    if wikis.is_empty() {
-        return Err(Error::NoWikiConfigured);
-    }
+pub fn lint(args: Args, config: Config, wikis: WikiSet) -> Result<()> {
+    let target_wikis = crate::commands::wiki_selection::resolve_wiki_selection(&args, &wikis)?;
 
     let mut total_issues = 0usize;
 
-    for wiki in wikis.iter() {
+    for wiki in target_wikis {
         let files = scan(wiki, &config.index);
         let mut issues: Vec<String> = Vec::new();
 

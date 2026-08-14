@@ -4,16 +4,14 @@ use terminalwiki_core::filetype::ContentType;
 use terminalwiki_core::sanitize::sanitize_line;
 use terminalwiki_core::scan::scan;
 use terminalwiki_core::wiki::WikiSet;
-use terminalwiki_core::{Config, Error, Result};
+use terminalwiki_core::{Config, Result};
 
 use crate::args::Args;
 
-pub fn stats(_args: Args, config: Config, wikis: WikiSet) -> Result<()> {
-    if wikis.is_empty() {
-        return Err(Error::NoWikiConfigured);
-    }
+pub fn stats(args: Args, config: Config, wikis: WikiSet) -> Result<()> {
+    let target_wikis = crate::commands::wiki_selection::resolve_wiki_selection(&args, &wikis)?;
 
-    for wiki in wikis.iter() {
+    for wiki in target_wikis {
         let files = scan(wiki, &config.index);
 
         let total = files.len();

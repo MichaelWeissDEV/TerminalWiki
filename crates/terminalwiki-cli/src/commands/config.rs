@@ -1,12 +1,18 @@
-//! `tw config` — display current resolved configuration (spec §82).
+//! `tw config` — display and validate configuration (spec §82, §93).
 
+use terminalwiki_core::paths::config_file;
 use terminalwiki_core::wiki::WikiSet;
 use terminalwiki_core::{Config, Result};
 
 use crate::args::Args;
 
 pub fn show(_args: Args, config: Config, _wikis: WikiSet) -> Result<()> {
-    println!("# TerminalWiki active configuration");
+    if let Some(path) = config_file() {
+        println!("# Config file: {}", path.display());
+    } else {
+        println!("# Config file: (not found, using defaults)");
+    }
+
     println!(
         "default_wiki = {:?}",
         config.default_wiki.as_deref().unwrap_or("")
@@ -31,7 +37,7 @@ pub fn show(_args: Args, config: Config, _wikis: WikiSet) -> Result<()> {
     println!();
     println!("[wikis]");
     for w in &config.wikis {
-        println!("[[wikis]]");
+        println!("[[wiki]]");
         println!("name = {:?}", w.name);
         println!("path = {:?}", w.path.display().to_string());
         if !w.mounts.is_empty() {

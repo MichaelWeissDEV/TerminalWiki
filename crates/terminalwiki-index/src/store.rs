@@ -1,4 +1,4 @@
-//! Compact persistent metadata store in state.json (spec §15, §16, §21, §22).
+//! Compact persistent metadata store in state.json (spec §15-§17).
 
 use std::fs::{self, File};
 use std::path::Path;
@@ -6,8 +6,8 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use terminalwiki_core::error::{Error, Result};
 
-use crate::entry::IndexEntry;
-use crate::tantivy_store::{TantivyStore, INDEX_SCHEMA_VERSION};
+use crate::entry::DocumentState;
+use crate::tantivy_store::INDEX_SCHEMA_VERSION;
 
 /// Persistent state container stored in `state.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -15,10 +15,10 @@ pub struct IndexState {
     pub schema_version: u32,
     pub built_at: u64,
     pub document_count: usize,
-    pub entries: Vec<IndexEntry>,
+    pub entries: Vec<DocumentState>,
 }
 
-pub fn save_index(index_dir: &Path, entries: &[IndexEntry]) -> Result<()> {
+pub fn save_state(index_dir: &Path, states: &[DocumentState]) -> Result<()> {
     if !index_dir.exists() {
         fs::create_dir_all(index_dir).map_err(|e| Error::io(index_dir, e))?;
     }
@@ -29,8 +29,8 @@ pub fn save_index(index_dir: &Path, entries: &[IndexEntry]) -> Result<()> {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0),
-        document_count: entries.len(),
-        entries: entries.to_vec(),
+        document_count: states.len(),
+        entries: states.to_vec(),
     };
 
     let state_path = index_dir.join("state.json");
@@ -38,14 +38,10 @@ pub fn save_index(index_dir: &Path, entries: &[IndexEntry]) -> Result<()> {
     serde_json::to_writer(state_file, &state)
         .map_err(|e| Error::index(format!("Failed to serialize state.json: {e}")))?;
 
-    // Sync Tantivy in its isolated `index_dir/tantivy` directory
-    let mut tantivy_store = TantivyStore::open_or_create(index_dir)?;
-    tantivy_store.update_entries(index_dir, entries)?;
-
     Ok(())
 }
 
-pub fn load_index(index_dir: &Path) -> Result<Option<Vec<IndexEntry>>> {
+pub fn load_index(index_dir: &Path) -> Result<Option<Vec<DocumentState>>> {
     let state_path = index_dir.join("state.json");
 
     if !state_path.exists() {

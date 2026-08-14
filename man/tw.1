@@ -1,0 +1,114 @@
+.TH TW 1 "August 2026" "TerminalWiki 0.1.0" "User Commands"
+.SH NAME
+tw \- fast, file-based terminal knowledge base and markdown viewer
+.SH SYNOPSIS
+.B tw
+[\fIOPTIONS\fR] [\fIWIKI\fR] [\fIPAGE\fR]
+.br
+.B tw
+\fICOMMAND\fR [\fIARGS...\fR]
+.SH DESCRIPTION
+\fBTerminalWiki\fR is a high-performance terminal knowledge base system that indexes and renders markdown and code repositories directly from ordinary files on disk.
+.SH COMMANDS
+.TP
+.BR tw " [" \fIPAGE\fR "]"
+Displays a page or the wiki home overview.
+.TP
+.BR "tw search" " \fIQUERY\fR"
+Performs full-text search against the persistent Tantivy index.
+.TP
+.BR "tw find" " \fIQUERY\fR"
+Performs instant fuzzy search matching titles, paths, aliases, and tags.
+.TP
+.BR "tw tui" " [" \fIWIKI\fR "] [" \fIPAGE\fR "]"
+Launches the interactive terminal user interface.
+.TP
+.BR "tw new" " \fIPAGE\fR"
+Creates a new page with frontmatter and opens it in $EDITOR.
+.TP
+.BR "tw edit" " \fIPAGE\fR"
+Opens the target page in $EDITOR.
+.TP
+.BR "tw backlinks" " \fIPAGE\fR"
+Lists pages that contain incoming links to the target page.
+.TP
+.BR "tw links" " \fIPAGE\fR"
+Lists outgoing links from the target page.
+.TP
+.BR "tw related" " \fIPAGE\fR"
+Calculates deterministic related pages based on graph connectivity.
+.TP
+.BR "tw graph" " [" \fIPAGE\fR "]"
+Renders the terminal-native link graph or exports Graphviz DOT format with \fB--format dot\fR.
+.TP
+.BR "tw tags" " [" \fIWIKI\fR "]"
+Lists all tags across the wiki with frequency counts.
+.TP
+.BR "tw tag" " \fITAG\fR"
+Lists pages tagged with \fITAG\fR.
+.TP
+.BR "tw wiki" " \fISUBCOMMAND\fR"
+Manages registered wikis: \fBlist\fR, \fBadd\fR, \fBremove\fR, \fBrename\fR, \fBmount\fR, \fBunmount\fR, \fBdefault\fR.
+.TP
+.BR "tw index" " \fBstatus\fR|\fBupdate\fR|\fBrebuild\fR"
+Manages search index status, incremental delta updates, or full rebuilds.
+.TP
+.BR "tw lint"
+Scans the wiki for broken links, missing assets, and frontmatter diagnostics.
+.TP
+.BR "tw doctor"
+Displays diagnostic report of configuration and terminal capabilities.
+.TP
+.BR "tw config"
+Displays resolved configuration settings.
+.TP
+.BR "tw completions" " \fBbash\fR|\fBzsh\fR|\fBfish\fR"
+Outputs shell completion script to stdout.
+.SH OPTIONS
+.TP
+.BR \-\-wiki " \fINAME\fR"
+Specifies the target wiki.
+.TP
+.BR \-\-all
+Executes query or operation across all registered wikis.
+.TP
+.BR \-\-plain ", " \-\-no\-color
+Disables ANSI styling and color output.
+.TP
+.BR \-\-json
+Formats command output as JSON.
+.TP
+.BR \-\-jsonl
+Formats search results as newline-delimited JSON.
+.TP
+.BR \-\-path\-only
+Prints only file paths.
+.TP
+.BR \-\-version
+Prints program version.
+.TP
+.BR \-\-help ", " \-h
+Prints command help.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 2
+Invalid command-line arguments or usage.
+.TP
+.B 3
+Page not found.
+.TP
+.B 4
+Wiki not found.
+.TP
+.B 5
+Search index error.
+.TP
+.B 6
+Configuration error.
+.SH AUTHORS
+TerminalWiki is created by Michael Weiss.
+.SH SEE ALSO
+https://terminalwiki.readthedocs.io/

@@ -17,6 +17,7 @@ pub mod search;
 pub mod stats;
 pub mod tags;
 pub mod wiki;
+pub mod wiki_selection;
 
 use crate::args::{Args, Command};
 use terminalwiki_core::wiki::WikiSet;

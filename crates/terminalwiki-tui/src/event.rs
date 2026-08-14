@@ -1,4 +1,4 @@
-//! Input and key event handling for TUI (spec §49-§56).
+//! Input and key event handling for TUI (spec §40-§53).
 
 use std::time::Duration;
 
@@ -32,6 +32,7 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> Result<()> {
         Mode::Finder => handle_finder_key(app, key),
         Mode::Outline => handle_outline_key(app, key),
         Mode::Backlinks => handle_backlinks_key(app, key),
+        Mode::Command => handle_command_key(app, key),
         Mode::Help => handle_help_key(app, key),
         Mode::InPageSearch => handle_search_key(app, key),
     }
@@ -50,6 +51,12 @@ fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<()> {
         }
         (KeyModifiers::NONE, KeyCode::Char('k')) | (KeyModifiers::NONE, KeyCode::Up) => {
             app.scroll_up(1);
+        }
+        (KeyModifiers::NONE, KeyCode::Char('h')) | (KeyModifiers::NONE, KeyCode::Left) => {
+            app.scroll_left(4);
+        }
+        (KeyModifiers::NONE, KeyCode::Char('l')) | (KeyModifiers::NONE, KeyCode::Right) => {
+            app.scroll_right(4);
         }
         (KeyModifiers::CONTROL, KeyCode::Char('d')) => {
             app.scroll_down(view_h / 2, view_h);
@@ -79,6 +86,11 @@ fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<()> {
         (KeyModifiers::NONE, KeyCode::Char('b')) => {
             app.load_backlinks();
             app.mode = Mode::Backlinks;
+        }
+        (KeyModifiers::NONE, KeyCode::Char(':')) => {
+            app.mode = Mode::Command;
+            app.command_input.clear();
+            app.update_command_suggestions();
         }
         (KeyModifiers::NONE, KeyCode::Char('?')) => {
             app.mode = Mode::Help;
@@ -124,18 +136,34 @@ fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<()> {
             if let Some(idx) = app.selected_link_idx {
                 if let Some(target) = app.links.get(idx).map(|l| l.target.clone()) {
                     match target {
-                        LinkTarget::Wiki(target_name) => {
-                            let wiki = app.current_wiki.clone();
-                            let _ = app.load_page(&wiki, &target_name, true);
+                        LinkTarget::Wiki {
+                            wiki,
+                            page,
+                            anchor: _,
+                        } => {
+                            let target_wiki = wiki.unwrap_or_else(|| app.current_wiki.clone());
+                            let _ = app.load_page(&target_wiki, &page, true);
                         }
                         LinkTarget::External(url) => {
                             app.status_message = Some(format!("External link: {url}"));
                         }
-                        LinkTarget::File(file) => {
+                        LinkTarget::File { path, line_range } => {
                             let wiki = app.current_wiki.clone();
-                            let _ = app.load_page(&wiki, &file, true);
+                            let path_str = path.to_string_lossy().into_owned();
+                            if app.load_page(&wiki, &path_str, true).is_ok() {
+                                if let Some((start, _)) = line_range {
+                                    app.scroll = start.saturating_sub(1);
+                                }
+                            }
                         }
-                        LinkTarget::Heading(_) => {}
+                        LinkTarget::Heading(anchor) => {
+                            for h in &app.headings {
+                                if h.text.eq_ignore_ascii_case(&anchor) {
+                                    app.scroll = h.line;
+                                    break;
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -221,6 +249,33 @@ fn handle_backlinks_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 let path_str = b.from_relative.to_string_lossy().into_owned();
                 let _ = app.load_page(&b.from_wiki, &path_str, true);
             }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn handle_command_key(app: &mut App, key: KeyEvent) -> Result<()> {
+    match key.code {
+        KeyCode::Esc => {
+            app.mode = Mode::Normal;
+        }
+        KeyCode::Enter => {
+            app.mode = Mode::Normal;
+            app.execute_command();
+        }
+        KeyCode::Tab => {
+            if let Some(first) = app.command_suggestions.first() {
+                app.command_input = first.clone();
+            }
+        }
+        KeyCode::Backspace => {
+            app.command_input.pop();
+            app.update_command_suggestions();
+        }
+        KeyCode::Char(c) => {
+            app.command_input.push(c);
+            app.update_command_suggestions();
         }
         _ => {}
     }
