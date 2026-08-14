@@ -26,7 +26,7 @@ in "Baseline". No row is asserted from expectation.
 |---|---|---|
 | `cargo fmt --all -- --check` | 0 | PASS — no diffs |
 | `cargo check --workspace --all-targets --all-features` | 0 | PASS — 0 errors, 0 warnings |
-| `cargo test --workspace --all-features` | 0 | PASS — **184 passed, 0 failed** |
+| `cargo test --workspace --all-features` | 0 | PASS — **186 passed, 0 failed** |
 | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | 0 | PASS — 0 warnings |
 | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps` | 0 | PASS — 0 warnings |
 | `cargo build --release --workspace` | 0 | PASS — release binary produced |
@@ -38,11 +38,11 @@ in "Baseline". No row is asserted from expectation.
 | Target | Passed |
 |---|---|
 | `terminalwiki-core` (lib) | 152 |
-| `terminalwiki-render` (lib) | 14 |
+| `terminalwiki-render` (lib) | 16 |
 | `terminalwiki-index` (lib) | 7 |
 | `terminalwiki-graph` (`tests/graph_tests.rs`) | 6 |
 | `terminalwiki` (`tests/integration_tests.rs`) | 5 |
-| **Total** | **184** |
+| **Total** | **186** |
 
 Binary and doc-test targets report 0 tests and are omitted.
 
