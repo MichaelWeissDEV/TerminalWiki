@@ -49,29 +49,58 @@ impl Style {
         Self::default()
     }
 
-    pub fn with_fg(mut self, c: Color) -> Self {
+    pub fn fg(mut self, c: Color) -> Self {
         self.fg = Some(c);
         self
     }
 
-    pub fn with_bold(mut self) -> Self {
+    pub fn with_fg(self, c: Color) -> Self {
+        self.fg(c)
+    }
+
+    pub fn bold(mut self) -> Self {
         self.bold = true;
         self
     }
 
-    pub fn with_italic(mut self) -> Self {
+    pub fn with_bold(self) -> Self {
+        self.bold()
+    }
+
+    pub fn italic(mut self) -> Self {
         self.italic = true;
         self
     }
 
-    pub fn with_dim(mut self) -> Self {
+    pub fn with_italic(self) -> Self {
+        self.italic()
+    }
+
+    pub fn dim(mut self) -> Self {
         self.dim = true;
         self
     }
 
-    pub fn with_underline(mut self) -> Self {
+    pub fn with_dim(self) -> Self {
+        self.dim()
+    }
+
+    pub fn underline(mut self) -> Self {
         self.underline = true;
         self
+    }
+
+    pub fn with_underline(self) -> Self {
+        self.underline()
+    }
+
+    pub fn strikethrough(mut self) -> Self {
+        self.strikethrough = true;
+        self
+    }
+
+    pub fn with_strikethrough(self) -> Self {
+        self.strikethrough()
     }
 
     /// Wraps `text` with the ANSI codes for this style.

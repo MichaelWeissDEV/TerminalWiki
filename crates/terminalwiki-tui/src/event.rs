@@ -1,4 +1,4 @@
-//! Input and event loop handling for TUI.
+//! Input and key event handling for TUI (spec §49-§56).
 
 use std::time::Duration;
 
@@ -27,6 +27,7 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> Result<()> {
     match app.mode {
         Mode::Normal => handle_normal_key(app, key),
         Mode::Finder => handle_finder_key(app, key),
+        Mode::Outline => handle_outline_key(app, key),
         Mode::Backlinks => handle_backlinks_key(app, key),
         Mode::Help => handle_help_key(app, key),
         Mode::InPageSearch => handle_search_key(app, key),
@@ -35,7 +36,7 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> Result<()> {
 
 fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<()> {
     let (_, rows) = crossterm::terminal::size().unwrap_or((80, 24));
-    let view_h = (rows as usize).saturating_sub(2);
+    let view_h = (rows as usize).saturating_sub(3);
 
     match (key.modifiers, key.code) {
         (KeyModifiers::NONE, KeyCode::Char('q')) | (KeyModifiers::NONE, KeyCode::Esc) => {
@@ -64,6 +65,14 @@ fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<()> {
             app.finder_query.clear();
             app.update_finder_filter();
         }
+        (KeyModifiers::NONE, KeyCode::Char('o')) => {
+            if !app.headings.is_empty() {
+                app.mode = Mode::Outline;
+                app.outline_selected = 0;
+            } else {
+                app.status_message = Some("No headings in current document".to_string());
+            }
+        }
         (KeyModifiers::NONE, KeyCode::Char('b')) => {
             app.load_backlinks();
             app.mode = Mode::Backlinks;
@@ -91,15 +100,30 @@ fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<()> {
                     .map(|i| (i + 1) % app.extracted_links.len())
                     .unwrap_or(0);
                 app.selected_link_idx = Some(next);
+                let (line_no, ref target) = app.extracted_links[next];
+                app.scroll = line_no.saturating_sub(view_h / 2);
                 app.status_message = Some(format!(
-                    "Selected link: [[{}]] (press Enter to open)",
-                    app.extracted_links[next]
+                    "Link: [[{target}]] (press Enter to open)"
+                ));
+            }
+        }
+        (KeyModifiers::SHIFT, KeyCode::BackTab) => {
+            if !app.extracted_links.is_empty() {
+                let prev = app
+                    .selected_link_idx
+                    .map(|i| if i == 0 { app.extracted_links.len() - 1 } else { i - 1 })
+                    .unwrap_or(0);
+                app.selected_link_idx = Some(prev);
+                let (line_no, ref target) = app.extracted_links[prev];
+                app.scroll = line_no.saturating_sub(view_h / 2);
+                app.status_message = Some(format!(
+                    "Link: [[{target}]] (press Enter to open)"
                 ));
             }
         }
         (KeyModifiers::NONE, KeyCode::Enter) => {
             if let Some(idx) = app.selected_link_idx {
-                if let Some(target) = app.extracted_links.get(idx).cloned() {
+                if let Some((_, target)) = app.extracted_links.get(idx).cloned() {
                     let _ = app.load_page(&app.current_wiki.clone(), &target, true);
                 }
             }
@@ -123,9 +147,10 @@ fn handle_finder_key(app: &mut App, key: KeyEvent) -> Result<()> {
             }
         }
         KeyCode::Enter => {
-            if let Some((wiki, path, _)) = app.finder_filtered.get(app.finder_selected).cloned() {
+            if let Some(hit) = app.finder_filtered.get(app.finder_selected).cloned() {
                 app.mode = Mode::Normal;
-                let _ = app.load_page(&wiki, &path, true);
+                let path_str = hit.relative.to_string_lossy().into_owned();
+                let _ = app.load_page(&hit.wiki, &path_str, true);
             }
         }
         KeyCode::Backspace => {
@@ -141,15 +166,39 @@ fn handle_finder_key(app: &mut App, key: KeyEvent) -> Result<()> {
     Ok(())
 }
 
+fn handle_outline_key(app: &mut App, key: KeyEvent) -> Result<()> {
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('o') => {
+            app.mode = Mode::Normal;
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            app.outline_selected = app.outline_selected.saturating_sub(1);
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if app.outline_selected + 1 < app.headings.len() {
+                app.outline_selected += 1;
+            }
+        }
+        KeyCode::Enter => {
+            if let Some((_, _, line_idx)) = app.headings.get(app.outline_selected) {
+                app.scroll = *line_idx;
+                app.mode = Mode::Normal;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 fn handle_backlinks_key(app: &mut App, key: KeyEvent) -> Result<()> {
     match key.code {
         KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('b') => {
             app.mode = Mode::Normal;
         }
-        KeyCode::Up => {
+        KeyCode::Up | KeyCode::Char('k') => {
             app.backlinks_selected = app.backlinks_selected.saturating_sub(1);
         }
-        KeyCode::Down => {
+        KeyCode::Down | KeyCode::Char('j') => {
             if app.backlinks_selected + 1 < app.backlinks.len() {
                 app.backlinks_selected += 1;
             }

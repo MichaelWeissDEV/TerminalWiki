@@ -1,19 +1,20 @@
+//! Incremental index builder using Rayon and Blake3 (spec §15, §16).
+
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use rayon::prelude::*;
 use ignore::WalkBuilder;
-
+use rayon::prelude::*;
 use terminalwiki_core::config::Config;
 use terminalwiki_core::error::{Error, Result};
 use terminalwiki_core::filetype::{classify, ContentType};
 use terminalwiki_core::frontmatter::Frontmatter;
 use terminalwiki_core::link::find_links;
-use terminalwiki_core::sanitize;
+use terminalwiki_core::sanitize::sanitize_text;
 use terminalwiki_core::wiki::Wiki;
 
-use crate::entry::IndexEntry;
+use crate::entry::{ContentTypeHelper, IndexEntry};
 
 fn hash_content(content: &[u8]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
@@ -38,10 +39,11 @@ pub fn parse_markdown(content: &str) -> (Vec<String>, String, Vec<String>) {
             Event::Start(Tag::Heading { .. }) => {
                 in_heading = true;
             }
-            Event::End(TagEnd::Heading { .. }) => {
+            Event::End(TagEnd::Heading(_)) => {
                 in_heading = false;
-                if !current_heading.trim().is_empty() {
-                    headings.push(current_heading.trim().to_string());
+                let trimmed = current_heading.trim();
+                if !trimmed.is_empty() {
+                    headings.push(trimmed.to_string());
                     current_heading.clear();
                 }
             }
@@ -60,166 +62,170 @@ pub fn parse_markdown(content: &str) -> (Vec<String>, String, Vec<String>) {
                     links.push(l.raw);
                 }
             }
-            Event::Code(text) => {
-                body.push_str(text.as_ref());
+            Event::Code(code) => {
+                let code_str = code.as_ref();
+                body.push_str(code_str);
                 body.push(' ');
             }
             _ => {}
         }
     }
 
-    (headings, sanitize::sanitize_text(&body), links)
+    (headings, body, links)
 }
 
 pub fn index_file(
-    wiki: &Wiki,
+    wiki_name: &str,
+    wiki_root: &Path,
     path: &Path,
-    relative: &Path,
-    size: u64,
-    mtime: u64,
-) -> Result<IndexEntry> {
-    let content_bytes = fs::read(path).map_err(|e| Error::Io {
-        path: Some(path.to_path_buf()),
-        source: e,
-    })?;
-    
-    let content_type = classify(path, &content_bytes);
-    let content_hash = hash_content(&content_bytes);
+    existing: Option<&IndexEntry>,
+) -> Result<Option<IndexEntry>> {
+    let metadata = fs::metadata(path).map_err(|e| Error::io(path, e))?;
+    if !metadata.is_file() {
+        return Ok(None);
+    }
 
-    let too_large = size > 2 * 1024 * 1024; // 2MB arbitrary limit for too large text indexing
+    let size = metadata.len();
+    let mtime = metadata
+        .modified()
+        .map(|t| t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs())
+        .unwrap_or(0);
 
-    let (title, aliases, tags, headings, body_text, wiki_links) = match content_type {
-        ContentType::Markdown if !too_large => {
-            if let Ok(text) = String::from_utf8(content_bytes) {
-                let fm = Frontmatter::parse(&text);
-                let text_without_fm = &text[fm.body_offset..];
-                let (headings, body, links) = parse_markdown(text_without_fm);
-                (
-                    fm.title.unwrap_or_else(|| {
-                        relative
-                            .file_stem()
-                            .and_then(|s| s.to_str())
-                            .unwrap_or("")
-                            .to_string()
-                    }),
-                    fm.aliases,
-                    fm.tags,
-                    headings,
-                    body,
-                    links,
-                )
-            } else {
-                (
-                    relative.to_string_lossy().to_string(),
-                    vec![],
-                    vec![],
-                    vec![],
-                    String::new(),
-                    vec![],
-                )
-            }
+    let relative = path
+        .strip_prefix(wiki_root)
+        .map_err(|_| Error::other("Path outside wiki root"))?
+        .to_path_buf();
+
+    // Incremental skip check: if size & mtime match, keep existing
+    if let Some(entry) = existing {
+        if entry.size == size && entry.mtime == mtime {
+            return Ok(Some(entry.clone()));
         }
-        ContentType::Text | ContentType::Code if !too_large => {
-            if let Ok(text) = String::from_utf8(content_bytes) {
-                (
-                    relative.to_string_lossy().to_string(),
-                    vec![],
-                    vec![],
-                    vec![],
-                    sanitize::sanitize_text(&text),
-                    vec![],
-                )
-            } else {
-                (
-                    relative.to_string_lossy().to_string(),
-                    vec![],
-                    vec![],
-                    vec![],
-                    String::new(),
-                    vec![],
-                )
-            }
-        }
-        _ => (
-            relative.to_string_lossy().to_string(),
-            vec![],
-            vec![],
-            vec![],
-            String::new(),
-            vec![],
-        ),
+    }
+
+    // Read with size ceiling (2 MB for full text parsing)
+    let max_read = 2 * 1024 * 1024;
+    let content = if size <= max_read {
+        fs::read(path).map_err(|e| Error::io(path, e))?
+    } else {
+        Vec::new()
     };
 
-    Ok(IndexEntry {
-        wiki: wiki.name.clone(),
+    let content_type = classify(path, &content);
+    let content_hash = hash_content(&content);
+
+    let (title, aliases, tags, headings, body_text, wiki_links) = match content_type {
+        ContentType::Markdown => {
+            let text = String::from_utf8_lossy(&content);
+            let fm = Frontmatter::parse(&text);
+            let raw_title = fm.title.unwrap_or_else(|| {
+                path.file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_default()
+            });
+
+            let body_slice = if fm.body_offset < text.len() {
+                &text[fm.body_offset..]
+            } else {
+                &text
+            };
+            let (h, b, l) = parse_markdown(body_slice);
+
+            (
+                sanitize_text(&raw_title),
+                fm.aliases,
+                fm.tags,
+                h,
+                sanitize_text(&b),
+                l,
+            )
+        }
+        ContentType::Text | ContentType::Code | ContentType::Latex => {
+            let text = String::from_utf8_lossy(&content);
+            let title = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default();
+            (sanitize_text(&title), Vec::new(), Vec::new(), Vec::new(), sanitize_text(&text), Vec::new())
+        }
+        ContentType::Image | ContentType::Binary => {
+            let title = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default();
+            (sanitize_text(&title), Vec::new(), Vec::new(), Vec::new(), String::new(), Vec::new())
+        }
+    };
+
+    Ok(Some(IndexEntry {
+        wiki: wiki_name.to_string(),
         path: path.to_path_buf(),
-        relative: relative.to_path_buf(),
+        relative,
         size,
         mtime,
         content_hash,
-        content_type,
+        content_type: ContentTypeHelper::from(content_type),
         title,
         aliases,
         tags,
         headings,
         body_text,
         wiki_links,
-    })
+    }))
 }
 
 pub fn update_index(
     wiki: &Wiki,
     _config: &Config,
-    existing: Option<Vec<IndexEntry>>,
+    existing_entries: Option<Vec<IndexEntry>>,
 ) -> Result<Vec<IndexEntry>> {
-    let mut old_entries = HashMap::new();
-    if let Some(entries) = existing {
-        for e in entries {
-            old_entries.insert(e.path.clone(), e);
+    let mut existing_map: HashMap<PathBuf, IndexEntry> = HashMap::new();
+    if let Some(entries) = existing_entries {
+        for entry in entries {
+            existing_map.insert(entry.relative.clone(), entry);
         }
     }
 
-    let mut paths_to_process = Vec::new();
-
+    let mut paths = Vec::new();
     let walker = WalkBuilder::new(&wiki.root)
-        .hidden(true)
+        .hidden(false)
         .git_ignore(true)
         .build();
 
     for result in walker {
-        let entry = match result {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        let path = entry.path();
-        if path.is_file() {
-            let md = entry.metadata().ok();
-            let size = md.as_ref().map(|m| m.len()).unwrap_or(0);
-            let mtime = md
-                .as_ref()
-                .and_then(|m| m.modified().ok())
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-
-            paths_to_process.push((path.to_path_buf(), size, mtime));
+        match result {
+            Ok(entry) => {
+                if let Some(ft) = entry.file_type() {
+                    if ft.is_file() {
+                        paths.push(entry.into_path());
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Warning while scanning wiki: {e}");
+            }
         }
     }
 
-    // Parallel process
-    let new_entries: Vec<IndexEntry> = paths_to_process
-        .into_par_iter()
-        .filter_map(|(path, size, mtime)| {
-            if let Some(old) = old_entries.get(&path) {
-                if old.mtime == mtime && old.size == size {
-                    return Some(old.clone());
-                }
-            }
-
-            let rel = path.strip_prefix(&wiki.root).unwrap_or(&path);
-            index_file(wiki, &path, rel, size, mtime).ok()
+    let results: Vec<Result<Option<IndexEntry>>> = paths
+        .par_iter()
+        .map(|path| {
+            let rel = path
+                .strip_prefix(&wiki.root)
+                .unwrap_or(path)
+                .to_path_buf();
+            let existing = existing_map.get(&rel);
+            index_file(&wiki.name, &wiki.root, path, existing)
         })
         .collect();
 
+    let mut new_entries = Vec::new();
+    for res in results {
+        if let Some(entry) = res? {
+            new_entries.push(entry);
+        }
+    }
+
+    new_entries.sort_by(|a, b| a.relative.cmp(&b.relative));
     Ok(new_entries)
 }

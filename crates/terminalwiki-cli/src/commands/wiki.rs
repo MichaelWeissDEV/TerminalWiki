@@ -243,7 +243,7 @@ fn write_config_raw(config: &Config) -> Result<()> {
             );
             if !w.mounts.is_empty() {
                 m.insert(
-                    "mounts".into(),
+                    "mount".into(),
                     toml::Value::Array(
                         w.mounts.iter().map(|s| toml::Value::String(s.clone())).collect(),
                     ),
@@ -254,7 +254,7 @@ fn write_config_raw(config: &Config) -> Result<()> {
         .collect();
 
     if !wikis.is_empty() {
-        doc.insert("wikis".into(), toml::Value::Array(wikis));
+        doc.insert("wiki".into(), toml::Value::Array(wikis));
     }
 
     let text = toml::to_string_pretty(&toml::Value::Table(doc))

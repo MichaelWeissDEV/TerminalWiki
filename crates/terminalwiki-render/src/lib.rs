@@ -12,8 +12,8 @@ pub mod width;
 
 pub use ansi::{Color, ColorMode, Style};
 pub use binary::render_binary_info;
-pub use code_view::render_code_file;
-pub use document::{Document, RenderedDocument, RenderedLine, Span};
+pub use code_view::{render_code_file, render_code_with_options, CodeRenderOptions};
+pub use document::{Block, Document, Inline, RenderedDocument, RenderedLine, Span};
 pub use markdown::parse_markdown;
 pub use math::MathRenderer;
 pub use plain::PlainRenderer;

@@ -1,32 +1,39 @@
-//! `tw find QUERY` — fuzzy-find a page by title or path (spec §13).
+//! `tw find QUERY` — fast fuzzy page finder using Nucleo (spec §13, §14).
 
-use terminalwiki_core::fuzzy;
+use serde::Serialize;
 use terminalwiki_core::sanitize::sanitize_line;
 use terminalwiki_core::wiki::WikiSet;
 use terminalwiki_core::{Config, Error, Result};
 
 use crate::args::Args;
 
+#[derive(Serialize)]
+struct FuzzyJsonOutput {
+    query: String,
+    results: Vec<FuzzyResultJsonItem>,
+}
+
+#[derive(Serialize)]
+struct FuzzyResultJsonItem {
+    wiki: String,
+    path: String,
+    title: String,
+    score: u32,
+}
+
 pub fn find(query: String, args: Args, _config: Config, wikis: WikiSet) -> Result<()> {
     if wikis.is_empty() {
         return Err(Error::NoWikiConfigured);
     }
 
-    let mut candidates: Vec<(String, String, String)> = Vec::new(); // (wiki, path, title)
+    let mut json_results = Vec::new();
+    let mut all_hits = Vec::new();
 
-    // Prefer the index for titles, fall back to file scanning.
     for wiki in wikis.iter() {
         if let Ok(idx) = terminalwiki_index::WikiIndex::load(&wiki.name) {
-            for entry in &idx.entries {
-                let path_str = entry.relative.to_string_lossy().into_owned();
-                candidates.push((wiki.name.clone(), path_str, entry.title.clone()));
-            }
-        } else {
-            // No index — scan page filenames only.
-            let files = terminalwiki_core::scan::scan(wiki, &terminalwiki_core::config::IndexConfig::default());
-            for f in files {
-                let path_str = f.relative.to_string_lossy().into_owned();
-                candidates.push((wiki.name.clone(), path_str, String::new()));
+            let hits = idx.find(&query, 20);
+            for hit in hits {
+                all_hits.push(hit);
             }
         }
         if !args.all {
@@ -34,32 +41,47 @@ pub fn find(query: String, args: Args, _config: Config, wikis: WikiSet) -> Resul
         }
     }
 
-    // Score each candidate against the query.
-    let mut scored: Vec<(i32, &(String, String, String))> = candidates
-        .iter()
-        .filter_map(|c| {
-            let title_score = if c.2.is_empty() {
-                None
-            } else {
-                fuzzy::score(&query, &c.2).map(|m| (m.score + 20, c))
-            };
-            let path_score = fuzzy::score(&query, &c.1).map(|m| (m.score, c));
+    // Sort by score descending
+    all_hits.sort_by(|a, b| b.score.cmp(&a.score));
+    all_hits.truncate(20);
 
-            title_score.or(path_score)
-        })
-        .collect();
+    if args.json {
+        for hit in &all_hits {
+            json_results.push(FuzzyResultJsonItem {
+                wiki: hit.wiki.clone(),
+                path: hit.relative.to_string_lossy().to_string(),
+                title: hit.title.clone(),
+                score: hit.score,
+            });
+        }
+        let output = FuzzyJsonOutput {
+            query: query.clone(),
+            results: json_results,
+        };
+        if let Ok(json_str) = serde_json::to_string_pretty(&output) {
+            println!("{json_str}");
+        }
+        return Ok(());
+    }
 
-    scored.sort_by(|a, b| b.0.cmp(&a.0));
-    scored.dedup_by_key(|s| s.1.1.clone());
+    if all_hits.is_empty() {
+        eprintln!("No matches found for '{}'.", sanitize_line(&query));
+        return Ok(());
+    }
 
-    let limit = 20;
-    for (_, (wiki, path, title)) in scored.into_iter().take(limit) {
-        let display_title = if title.is_empty() { path.as_str() } else { title.as_str() };
+    for hit in all_hits {
+        let path_str = hit.relative.to_string_lossy().to_string();
+        let display_title = if hit.title.is_empty() {
+            path_str.as_str()
+        } else {
+            hit.title.as_str()
+        };
+
         if args.path_only {
-            println!("{}", sanitize_line(path));
+            println!("{}", sanitize_line(&path_str));
         } else {
             println!("{}", sanitize_line(display_title));
-            println!("  {}:{}", sanitize_line(wiki), sanitize_line(path));
+            println!("  {}:{}", sanitize_line(&hit.wiki), sanitize_line(&path_str));
         }
     }
 

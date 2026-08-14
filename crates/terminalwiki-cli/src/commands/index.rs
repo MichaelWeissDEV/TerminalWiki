@@ -22,36 +22,24 @@ fn status(_config: Config, wikis: WikiSet) -> Result<()> {
     }
     for wiki in wikis.iter() {
         let dir = terminalwiki_core::paths::index_dir_for(&wiki.name);
-        let (status, entry_count) = if let Some(dir) = &dir {
-            let entries_file = dir.join("entries.jsonl");
-            let meta_file = dir.join("meta.json");
-            if entries_file.exists() && meta_file.exists() {
-                let count = count_lines(&entries_file).unwrap_or(0);
-                ("built", Some(count))
-            } else {
-                ("not built", None)
-            }
-        } else {
-            ("cache dir unavailable", None)
-        };
-
-        if let Some(n) = entry_count {
-            println!("  {} — {} ({} pages indexed)", wiki.name, status, n);
-        } else {
-            println!("  {} — {}", wiki.name, status);
-        }
+        println!("{}", wiki.name);
         if let Some(dir) = dir {
-            let meta = dir.join("meta.json");
-            if meta.exists() {
-                if let Ok(text) = std::fs::read_to_string(&meta) {
-                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
-                        if let Some(ts) = v.get("built_at").and_then(|t| t.as_u64()) {
-                            let formatted = terminalwiki_core::scan::format_timestamp(ts);
-                            println!("    Last built: {}", formatted);
-                        }
+            let meta_file = dir.join("meta.json");
+            if meta_file.exists() {
+                if let Ok(text) = std::fs::read_to_string(&meta_file) {
+                    if let Ok(meta) = serde_json::from_str::<terminalwiki_index::IndexMeta>(&text) {
+                        let formatted_ts = terminalwiki_core::scan::format_timestamp(meta.built_at);
+                        println!("  documents      {}", meta.document_count);
+                        println!("  schema         {}", meta.schema_version);
+                        println!("  updated        {}", formatted_ts);
+                        println!("  state          ready");
+                        continue;
                     }
                 }
             }
+            println!("  state          not built");
+        } else {
+            println!("  state          cache unavailable");
         }
     }
     Ok(())
@@ -83,10 +71,4 @@ fn rebuild(config: Config, wikis: WikiSet) -> Result<()> {
         eprintln!("done ({} pages, {:.1}s)", idx.entries.len(), t.elapsed().as_secs_f32());
     }
     Ok(())
-}
-
-fn count_lines(path: &std::path::Path) -> std::io::Result<usize> {
-    use std::io::{BufRead, BufReader};
-    let f = std::fs::File::open(path)?;
-    Ok(BufReader::new(f).lines().count())
 }

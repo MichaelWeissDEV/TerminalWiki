@@ -15,6 +15,7 @@ pub mod paths;
 pub mod resolve;
 pub mod sanitize;
 pub mod scan;
+pub mod unicode;
 pub mod wiki;
 
 pub use config::{Config, Theme};
@@ -22,4 +23,5 @@ pub use error::{Error, ExitCode, Result};
 pub use filetype::ContentType;
 pub use frontmatter::Frontmatter;
 pub use link::{LinkTarget, WikiLink};
+pub use unicode::{display_width, pad_display_width, truncate_display_width};
 pub use wiki::{Wiki, WikiSet};

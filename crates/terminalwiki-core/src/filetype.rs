@@ -282,6 +282,20 @@ pub fn classify(path: &Path, bytes: &[u8]) -> ContentType {
     }
 }
 
+/// Classifies a file on disk by inspecting its extension and sniffing leading bytes.
+pub fn classify_file(path: &Path) -> std::io::Result<ContentType> {
+    use std::io::Read;
+    if let Some(known) = classify_by_extension(path) {
+        if known == ContentType::Image {
+            return Ok(ContentType::Image);
+        }
+    }
+    let mut file = std::fs::File::open(path)?;
+    let mut buf = [0u8; SNIFF_LEN];
+    let n = file.read(&mut buf)?;
+    Ok(classify(path, &buf[..n]))
+}
+
 /// Formats a byte count the way the spec's binary-file block shows it (spec §5).
 pub fn human_size(bytes: u64) -> String {
     const UNITS: [&str; 6] = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];

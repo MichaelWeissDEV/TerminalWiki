@@ -70,17 +70,17 @@ impl Wiki {
     /// `.terminalwiki.toml`. Returns `None` when the wiki has no home page, in
     /// which case the caller shows a generated overview rather than failing.
     pub fn home_page(&self) -> Option<PathBuf> {
-        for name in HOME_CANDIDATES {
-            let candidate = self.root.join(name);
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
         if let Some(home) = &self.local.home {
             if let Ok(p) = self.resolve_within(Path::new(home)) {
                 if p.is_file() {
                     return Some(p);
                 }
+            }
+        }
+        for name in HOME_CANDIDATES {
+            let candidate = self.root.join(name);
+            if candidate.is_file() {
+                return Some(candidate);
             }
         }
         None

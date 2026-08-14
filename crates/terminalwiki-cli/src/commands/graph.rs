@@ -18,7 +18,7 @@ fn build_graph(wikis: &WikiSet, config: &Config) -> WikiGraph {
                 entries.push(GraphEntry {
                     wiki: e.wiki,
                     relative: e.relative,
-                    content_type: e.content_type.as_str().to_string(),
+                    content_type: terminalwiki_core::filetype::ContentType::from(e.content_type).as_str().to_string(),
                     title: e.title,
                     tags: e.tags,
                     wiki_links: e.wiki_links,
