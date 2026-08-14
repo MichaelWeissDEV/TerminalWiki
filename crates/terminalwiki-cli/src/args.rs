@@ -279,8 +279,8 @@ impl Args {
                     if arg == "--type" && j + 1 < positional.len() {
                         type_filter = Some(positional[j+1].clone());
                         j += 2;
-                    } else if arg.starts_with("--type=") {
-                        type_filter = Some(arg["--type=".len()..].to_string());
+                    } else if let Some(val) = arg.strip_prefix("--type=") {
+                        type_filter = Some(val.to_string());
                         j += 1;
                     } else {
                         j += 1;
@@ -375,16 +375,15 @@ impl Args {
                 parsed.command = Command::Completions { shell: positional[1].clone() };
             }
             _ => {
-                if cmd.starts_with("@") {
+                if let Some(wiki_name) = cmd.strip_prefix('@') {
                     // @WIKI [PAGE]
-                    let wiki = cmd[1..].to_string();
                     let page = if positional.len() > 1 {
                         positional[1].clone()
                     } else {
                         String::new()
                     };
                     parsed.command = Command::Page {
-                        wiki: Some(wiki),
+                        wiki: Some(wiki_name.to_string()),
                         page,
                     };
                 } else if positional.len() == 1 {

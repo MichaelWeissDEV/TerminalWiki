@@ -42,7 +42,7 @@ pub fn find(query: String, args: Args, _config: Config, wikis: WikiSet) -> Resul
     }
 
     // Sort by score descending
-    all_hits.sort_by(|a, b| b.score.cmp(&a.score));
+    all_hits.sort_by_key(|b| std::cmp::Reverse(b.score));
     all_hits.truncate(20);
 
     if args.json {
