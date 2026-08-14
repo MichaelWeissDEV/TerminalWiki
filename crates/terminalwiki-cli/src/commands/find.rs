@@ -81,7 +81,11 @@ pub fn find(query: String, args: Args, _config: Config, wikis: WikiSet) -> Resul
             println!("{}", sanitize_line(&path_str));
         } else {
             println!("{}", sanitize_line(display_title));
-            println!("  {}:{}", sanitize_line(&hit.wiki), sanitize_line(&path_str));
+            println!(
+                "  {}:{}",
+                sanitize_line(&hit.wiki),
+                sanitize_line(&path_str)
+            );
         }
     }
 

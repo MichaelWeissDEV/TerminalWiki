@@ -49,7 +49,11 @@ fn update(config: Config, wikis: WikiSet) -> Result<()> {
         eprint!("Updating index for '{}' … ", wiki.name);
         let idx = terminalwiki_index::WikiIndex::update(wiki, &config)
             .map_err(|e| Error::index(e.to_string()))?;
-        eprintln!("done ({} pages, {:.1}s)", idx.entries.len(), t.elapsed().as_secs_f32());
+        eprintln!(
+            "done ({} pages, {:.1}s)",
+            idx.entries.len(),
+            t.elapsed().as_secs_f32()
+        );
     }
     Ok(())
 }
@@ -63,7 +67,11 @@ fn rebuild(config: Config, wikis: WikiSet) -> Result<()> {
         eprint!("Rebuilding index for '{}' … ", wiki.name);
         let idx = terminalwiki_index::WikiIndex::build(wiki, &config)
             .map_err(|e| Error::index(e.to_string()))?;
-        eprintln!("done ({} pages, {:.1}s)", idx.entries.len(), t.elapsed().as_secs_f32());
+        eprintln!(
+            "done ({} pages, {:.1}s)",
+            idx.entries.len(),
+            t.elapsed().as_secs_f32()
+        );
     }
     Ok(())
 }

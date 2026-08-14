@@ -160,8 +160,10 @@ fn parse_block(block: &str, fm: &mut Frontmatter) {
             if pending_list_key.is_some() {
                 let value = unquote(item.trim());
                 if value.is_empty() {
-                    fm.diagnostics
-                        .push(Diagnostic { line: lineno, message: "empty list item".into() });
+                    fm.diagnostics.push(Diagnostic {
+                        line: lineno,
+                        message: "empty list item".into(),
+                    });
                 } else {
                     pending_list.push(value);
                 }
@@ -202,7 +204,10 @@ fn parse_block(block: &str, fm: &mut Frontmatter) {
         let value = trimmed[colon + 1..].trim();
 
         if key.is_empty() {
-            fm.diagnostics.push(Diagnostic { line: lineno, message: "empty key".into() });
+            fm.diagnostics.push(Diagnostic {
+                line: lineno,
+                message: "empty key".into(),
+            });
             continue;
         }
 
@@ -254,7 +259,11 @@ fn parse_block(block: &str, fm: &mut Frontmatter) {
     }
 
     // Tags are normalised for matching but kept human-readable for display.
-    fm.tags = dedupe(fm.tags.drain(..).map(|t| t.trim_start_matches('#').trim().to_string()));
+    fm.tags = dedupe(
+        fm.tags
+            .drain(..)
+            .map(|t| t.trim_start_matches('#').trim().to_string()),
+    );
     fm.aliases = dedupe(fm.aliases.drain(..).map(|a| a.trim().to_string()));
 }
 
@@ -370,7 +379,10 @@ mod tests {
     #[test]
     fn duplicate_keys_are_reported() {
         let fm = Frontmatter::parse("---\ntitle: A\ntitle: B\n---\nx");
-        assert!(fm.diagnostics.iter().any(|d| d.message.contains("duplicate key")));
+        assert!(fm
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("duplicate key")));
     }
 
     #[test]
@@ -417,7 +429,10 @@ mod tests {
     #[test]
     fn unknown_keys_are_preserved_not_dropped() {
         let fm = Frontmatter::parse("---\nauthor: Ada\n---\nx");
-        assert_eq!(fm.extra.get("author").and_then(|v| v.as_scalar()), Some("Ada"));
+        assert_eq!(
+            fm.extra.get("author").and_then(|v| v.as_scalar()),
+            Some("Ada")
+        );
     }
 
     #[test]

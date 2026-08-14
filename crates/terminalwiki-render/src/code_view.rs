@@ -135,7 +135,8 @@ pub fn render_code_with_options(
         // Expand tabs with true tabstop alignment based on display column
         for mut span in line_spans {
             if span.text.contains('\t') {
-                span.text = expand_tabs_with_column(&span.text, options.tab_width, &mut current_col);
+                span.text =
+                    expand_tabs_with_column(&span.text, options.tab_width, &mut current_col);
             } else {
                 current_col += display_width(&span.text);
             }

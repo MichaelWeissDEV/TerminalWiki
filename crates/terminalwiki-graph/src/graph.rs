@@ -148,13 +148,17 @@ impl WikiGraph {
                 // Let's just find a matching node
                 let target_path = PathBuf::from(format!("{}.md", link));
                 let exact_key = Self::make_key(&entry.wiki, &target_path);
-                
+
                 // For this mock implementation we'll look it up by checking title or path matches
                 let mut target_idx = id_to_index.get(&exact_key).copied();
                 if target_idx.is_none() {
                     // Try to find any node matching the link as stem or title
                     target_idx = nodes.iter().position(|n| {
-                        let n_stem = n.id.relative.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                        let n_stem =
+                            n.id.relative
+                                .file_stem()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("");
                         n_stem == link || n.title == *link
                     });
                 }
@@ -177,9 +181,9 @@ impl WikiGraph {
             // Process image links
             for link in &entry.image_links {
                 // find asset
-                let target_idx = nodes.iter().position(|n| {
-                    n.id.relative.to_string_lossy().contains(link)
-                });
+                let target_idx = nodes
+                    .iter()
+                    .position(|n| n.id.relative.to_string_lossy().contains(link));
 
                 let edge_idx = edges.len();
                 edges.push(Edge {
@@ -259,7 +263,13 @@ impl WikiGraph {
         let key = Self::make_key(wiki, relative);
         let center = match self.id_to_index.get(&key) {
             Some(&idx) => idx,
-            None => return SubGraph { nodes: vec![], edges: vec![], center: 0 },
+            None => {
+                return SubGraph {
+                    nodes: vec![],
+                    edges: vec![],
+                    center: 0,
+                }
+            }
         };
 
         let mut visited_nodes = HashSet::new();
@@ -298,7 +308,11 @@ impl WikiGraph {
         nodes.sort_unstable();
         edges.sort_unstable();
 
-        SubGraph { nodes, edges, center }
+        SubGraph {
+            nodes,
+            edges,
+            center,
+        }
     }
 
     /// Global stats

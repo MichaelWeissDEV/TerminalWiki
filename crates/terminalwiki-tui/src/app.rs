@@ -9,8 +9,8 @@ use terminalwiki_core::{Config, Error, Result};
 use terminalwiki_graph::{BacklinkInfo, GraphEntry, WikiGraph};
 use terminalwiki_index::{FuzzyDataset, FuzzyHit, FuzzyItem};
 use terminalwiki_render::{
-    detect_color_mode, render_markdown, render_path, ColorMode, RenderedDocument,
-    RenderedHeading, RenderedLine, RenderedLink, Theme,
+    detect_color_mode, render_markdown, render_path, ColorMode, RenderedDocument, RenderedHeading,
+    RenderedLine, RenderedLink, Theme,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,7 +177,10 @@ impl<'a> App<'a> {
         }
 
         // Phase 12: Virtual Home Overview
-        let mut overview = format!("# {}\n\n*Knowledge base overview*\n\n## Pages\n\n", wiki.name);
+        let mut overview = format!(
+            "# {}\n\n*Knowledge base overview*\n\n## Pages\n\n",
+            wiki.name
+        );
         let files = terminalwiki_core::scan::scan(wiki, &self.config.index);
         for file in files {
             if file.content_type.is_page() {
@@ -186,7 +189,8 @@ impl<'a> App<'a> {
             }
         }
 
-        let doc: RenderedDocument = render_markdown(&overview, self.config, &self.theme, self.color_mode);
+        let doc: RenderedDocument =
+            render_markdown(&overview, self.config, &self.theme, self.color_mode);
         self.current_wiki = wiki_name.to_string();
         self.current_path = PathBuf::from("index.md");
         self.current_title = wiki.name.clone();
@@ -195,12 +199,21 @@ impl<'a> App<'a> {
         self.links = doc.links;
         self.raw_content = overview;
         self.scroll = 0;
-        self.selected_link_idx = if !self.links.is_empty() { Some(0) } else { None };
+        self.selected_link_idx = if !self.links.is_empty() {
+            Some(0)
+        } else {
+            None
+        };
 
         Ok(())
     }
 
-    pub fn load_page(&mut self, wiki_name: &str, page_str: &str, record_history: bool) -> Result<()> {
+    pub fn load_page(
+        &mut self,
+        wiki_name: &str,
+        page_str: &str,
+        record_history: bool,
+    ) -> Result<()> {
         let resolution = resolve::resolve(self.wikis, wiki_name, page_str, &self.config.index)?;
 
         if record_history && !self.current_path.as_os_str().is_empty() {
@@ -216,7 +229,13 @@ impl<'a> App<'a> {
         let text = String::from_utf8_lossy(&bytes).into_owned();
 
         // Phase 13: Centralized render_path dispatch
-        let doc: RenderedDocument = render_path(&resolution.path, &bytes, self.config, &self.theme, self.color_mode);
+        let doc: RenderedDocument = render_path(
+            &resolution.path,
+            &bytes,
+            self.config,
+            &self.theme,
+            self.color_mode,
+        );
 
         self.current_wiki = resolution.wiki.clone();
         self.current_path = resolution.relative.clone();
@@ -294,7 +313,11 @@ impl<'a> App<'a> {
                     entries.push(GraphEntry {
                         wiki: e.wiki,
                         relative: e.relative,
-                        content_type: terminalwiki_core::filetype::ContentType::from(e.content_type).as_str().to_string(),
+                        content_type: terminalwiki_core::filetype::ContentType::from(
+                            e.content_type,
+                        )
+                        .as_str()
+                        .to_string(),
                         title: e.title,
                         tags: e.tags,
                         wiki_links: e.wiki_links,

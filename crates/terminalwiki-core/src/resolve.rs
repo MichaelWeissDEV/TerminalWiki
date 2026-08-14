@@ -26,8 +26,9 @@ use crate::scan::{self, ScannedFile};
 use crate::wiki::{Wiki, WikiSet};
 
 /// Extensions tried when a name carries none, in priority order (spec §5, §6).
-pub const RESOLVE_EXTENSIONS: &[&str] =
-    &["md", "markdown", "txt", "rst", "org", "tex", "rs", "py", "c", "h", "go", "sh"];
+pub const RESOLVE_EXTENSIONS: &[&str] = &[
+    "md", "markdown", "txt", "rst", "org", "tex", "rs", "py", "c", "h", "go", "sh",
+];
 
 /// What the user asked for on the command line (spec §8).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,9 +71,14 @@ impl Address {
                 wikis.require(name)?;
                 let rest = args[1..].join(" ");
                 return Ok(if rest.trim().is_empty() {
-                    Address::WikiHome { wiki: name.to_string() }
+                    Address::WikiHome {
+                        wiki: name.to_string(),
+                    }
                 } else {
-                    Address::Page { wiki: Some(name.to_string()), name: rest }
+                    Address::Page {
+                        wiki: Some(name.to_string()),
+                        name: rest,
+                    }
                 });
             }
         }
@@ -85,14 +91,22 @@ impl Address {
                 if is_wiki {
                     let rest = args[1..].join(" ");
                     return Ok(if rest.trim().is_empty() {
-                        Address::WikiHome { wiki: first.clone() }
+                        Address::WikiHome {
+                            wiki: first.clone(),
+                        }
                     } else {
-                        Address::Page { wiki: Some(first.clone()), name: rest }
+                        Address::Page {
+                            wiki: Some(first.clone()),
+                            name: rest,
+                        }
                     });
                 }
                 // Everything else is a page name in the default wiki. Joining
                 // with spaces lets `tw heap exploitation` work unquoted.
-                Ok(Address::Page { wiki: None, name: args.join(" ") })
+                Ok(Address::Page {
+                    wiki: None,
+                    name: args.join(" "),
+                })
             }
         }
     }
@@ -160,7 +174,11 @@ pub fn direct_candidates(name: &str) -> Vec<PathBuf> {
 
     // Naming-policy variants, so `tw "Heap Exploitation"` finds
     // `Heap-Exploitation.md` and `heap-exploitation.md` alike (spec §46).
-    for policy in [NamingPolicy::KebabCase, NamingPolicy::SnakeCase, NamingPolicy::Slug] {
+    for policy in [
+        NamingPolicy::KebabCase,
+        NamingPolicy::SnakeCase,
+        NamingPolicy::Slug,
+    ] {
         let converted = apply_policy_preserving_dirs(policy, trimmed);
         if converted != trimmed {
             for ext in ["md", "markdown"] {
@@ -178,7 +196,10 @@ pub fn direct_candidates(name: &str) -> Vec<PathBuf> {
 
 /// Applies a naming policy to each path segment, leaving separators intact.
 fn apply_policy_preserving_dirs(policy: NamingPolicy, name: &str) -> String {
-    name.split('/').map(|seg| policy.apply(seg)).collect::<Vec<_>>().join("/")
+    name.split('/')
+        .map(|seg| policy.apply(seg))
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// Tier 1 + 2: resolve without walking the whole wiki (spec §68).
@@ -187,7 +208,9 @@ fn apply_policy_preserving_dirs(policy: NamingPolicy, name: &str) -> String {
 pub fn resolve_shallow(wiki: &Wiki, name: &str) -> Option<Resolution> {
     // Tier 1: direct stat of constructed candidates.
     for candidate in direct_candidates(name) {
-        let Ok(full) = wiki.resolve_within(&candidate) else { continue };
+        let Ok(full) = wiki.resolve_within(&candidate) else {
+            continue;
+        };
         if full.is_file() {
             let kind = if candidate.as_os_str() == name {
                 MatchKind::ExactPath
@@ -259,11 +282,14 @@ pub fn resolve_deep(
     index_config: &crate::config::IndexConfig,
 ) -> Vec<Resolution> {
     let needle = name.trim().to_lowercase();
-    let normalized: Vec<String> =
-        [NamingPolicy::KebabCase, NamingPolicy::SnakeCase, NamingPolicy::Slug]
-            .iter()
-            .map(|p| p.apply(&needle).to_lowercase())
-            .collect();
+    let normalized: Vec<String> = [
+        NamingPolicy::KebabCase,
+        NamingPolicy::SnakeCase,
+        NamingPolicy::Slug,
+    ]
+    .iter()
+    .map(|p| p.apply(&needle).to_lowercase())
+    .collect();
 
     let mut out = Vec::new();
     for file in scan::scan(wiki, index_config) {
@@ -281,7 +307,12 @@ pub fn resolve_deep(
     out.sort_by(|a, b| {
         a.kind
             .cmp(&b.kind)
-            .then_with(|| a.relative.components().count().cmp(&b.relative.components().count()))
+            .then_with(|| {
+                a.relative
+                    .components()
+                    .count()
+                    .cmp(&b.relative.components().count())
+            })
             .then_with(|| a.relative.cmp(&b.relative))
     });
     out
@@ -295,7 +326,10 @@ fn match_file(
 ) -> Option<MatchKind> {
     let stem = file.relative.file_stem()?.to_string_lossy().to_lowercase();
     let rel_str = file.relative.to_string_lossy().to_lowercase();
-    let rel_no_ext = rel_str.rsplit_once('.').map(|(a, _)| a.to_string()).unwrap_or(rel_str.clone());
+    let rel_no_ext = rel_str
+        .rsplit_once('.')
+        .map(|(a, _)| a.to_string())
+        .unwrap_or(rel_str.clone());
 
     if rel_str == needle || rel_no_ext == needle {
         return Some(MatchKind::ExactPath);
@@ -386,7 +420,10 @@ pub fn resolve(
 ) -> Result<Resolution> {
     let order = wikis.search_order(start);
     if order.is_empty() {
-        return Err(Error::WikiNotFound { name: start.to_string(), known: wikis.names() });
+        return Err(Error::WikiNotFound {
+            name: start.to_string(),
+            known: wikis.names(),
+        });
     }
 
     // Tier 1+2 across every wiki before any deep scan: a cheap hit in a
@@ -433,7 +470,10 @@ fn collect_suggestions(
         }
     }
     let refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
-    crate::fuzzy::suggestions(name, refs, 5).into_iter().map(String::from).collect()
+    crate::fuzzy::suggestions(name, refs, 5)
+        .into_iter()
+        .map(String::from)
+        .collect()
 }
 
 #[cfg(test)]
@@ -455,8 +495,12 @@ mod tests {
     }
 
     fn wiki_at(base: &Path) -> Wiki {
-        Wiki::open(&WikiEntry { name: "main".into(), path: base.to_path_buf(), mounts: vec![] })
-            .unwrap()
+        Wiki::open(&WikiEntry {
+            name: "main".into(),
+            path: base.to_path_buf(),
+            mounts: vec![],
+        })
+        .unwrap()
     }
 
     fn set_with(entries: &[(&str, &Path, Vec<&str>)], default: &str) -> WikiSet {
@@ -480,7 +524,10 @@ mod tests {
     fn bare_tw_addresses_the_default_home() {
         let base = tmpdir("addr-home");
         let set = set_with(&[("main", &base, vec![])], "main");
-        assert_eq!(Address::parse(&[], &set, AddressSource::Positional).unwrap(), Address::DefaultHome);
+        assert_eq!(
+            Address::parse(&[], &set, AddressSource::Positional).unwrap(),
+            Address::DefaultHome
+        );
         fs::remove_dir_all(&base).ok();
     }
 
@@ -494,11 +541,22 @@ mod tests {
         let set = set_with(&[("main", &base, vec![]), ("rust", &rust, vec![])], "main");
 
         let a = Address::parse(&["rust".into()], &set, AddressSource::Positional).unwrap();
-        assert_eq!(a, Address::WikiHome { wiki: "rust".into() });
+        assert_eq!(
+            a,
+            Address::WikiHome {
+                wiki: "rust".into()
+            }
+        );
 
         // `tw page rust` is the documented escape hatch.
         let a = Address::parse(&["rust".into()], &set, AddressSource::ForcedPage).unwrap();
-        assert_eq!(a, Address::Page { wiki: None, name: "rust".into() });
+        assert_eq!(
+            a,
+            Address::Page {
+                wiki: None,
+                name: "rust".into()
+            }
+        );
         fs::remove_dir_all(&base).ok();
     }
 
@@ -508,9 +566,19 @@ mod tests {
         let rust = base.join("rust");
         fs::create_dir_all(&rust).unwrap();
         let set = set_with(&[("main", &base, vec![]), ("rust", &rust, vec![])], "main");
-        let a = Address::parse(&["rust".into(), "ownership".into()], &set, AddressSource::Positional)
-            .unwrap();
-        assert_eq!(a, Address::Page { wiki: Some("rust".into()), name: "ownership".into() });
+        let a = Address::parse(
+            &["rust".into(), "ownership".into()],
+            &set,
+            AddressSource::Positional,
+        )
+        .unwrap();
+        assert_eq!(
+            a,
+            Address::Page {
+                wiki: Some("rust".into()),
+                name: "ownership".into()
+            }
+        );
         fs::remove_dir_all(&base).ok();
     }
 
@@ -521,12 +589,27 @@ mod tests {
         fs::create_dir_all(&rust).unwrap();
         let set = set_with(&[("main", &base, vec![]), ("rust", &rust, vec![])], "main");
 
-        let a = Address::parse(&["@rust".into(), "ownership".into()], &set, AddressSource::Positional)
-            .unwrap();
-        assert_eq!(a, Address::Page { wiki: Some("rust".into()), name: "ownership".into() });
+        let a = Address::parse(
+            &["@rust".into(), "ownership".into()],
+            &set,
+            AddressSource::Positional,
+        )
+        .unwrap();
+        assert_eq!(
+            a,
+            Address::Page {
+                wiki: Some("rust".into()),
+                name: "ownership".into()
+            }
+        );
 
         let a = Address::parse(&["@rust".into()], &set, AddressSource::Positional).unwrap();
-        assert_eq!(a, Address::WikiHome { wiki: "rust".into() });
+        assert_eq!(
+            a,
+            Address::WikiHome {
+                wiki: "rust".into()
+            }
+        );
         fs::remove_dir_all(&base).ok();
     }
 
@@ -534,8 +617,12 @@ mod tests {
     fn at_syntax_reports_an_unknown_wiki_rather_than_a_missing_page() {
         let base = tmpdir("addr-atbad");
         let set = set_with(&[("main", &base, vec![])], "main");
-        let err =
-            Address::parse(&["@nope".into(), "x".into()], &set, AddressSource::Positional).unwrap_err();
+        let err = Address::parse(
+            &["@nope".into(), "x".into()],
+            &set,
+            AddressSource::Positional,
+        )
+        .unwrap_err();
         assert_eq!(err.exit_code(), crate::ExitCode::WikiNotFound);
         fs::remove_dir_all(&base).ok();
     }
@@ -550,7 +637,13 @@ mod tests {
             AddressSource::Positional,
         )
         .unwrap();
-        assert_eq!(a, Address::Page { wiki: None, name: "heap exploitation".into() });
+        assert_eq!(
+            a,
+            Address::Page {
+                wiki: None,
+                name: "heap exploitation".into()
+            }
+        );
         fs::remove_dir_all(&base).ok();
     }
 
@@ -663,7 +756,12 @@ mod tests {
         fs::create_dir_all(&outside).unwrap();
         fs::create_dir_all(&wiki).unwrap();
         fs::write(outside.join("secret.md"), "secret").unwrap();
-        let w = Wiki::open(&WikiEntry { name: "m".into(), path: wiki, mounts: vec![] }).unwrap();
+        let w = Wiki::open(&WikiEntry {
+            name: "m".into(),
+            path: wiki,
+            mounts: vec![],
+        })
+        .unwrap();
         assert!(resolve_shallow(&w, "../outside/secret").is_none());
         assert!(resolve_shallow(&w, "../outside/secret.md").is_none());
         fs::remove_dir_all(&base).ok();
@@ -743,7 +841,10 @@ mod tests {
         fs::write(main.join("ownership.md"), "# Local").unwrap();
         fs::write(rust.join("ownership.md"), "# Mounted").unwrap();
 
-        let set = set_with(&[("main", &main, vec!["rust"]), ("rust", &rust, vec![])], "main");
+        let set = set_with(
+            &[("main", &main, vec!["rust"]), ("rust", &rust, vec![])],
+            "main",
+        );
         let r = resolve(&set, "main", "ownership", &IndexConfig::default()).unwrap();
         assert_eq!(r.wiki, "main");
         fs::remove_dir_all(&base).ok();
@@ -758,7 +859,10 @@ mod tests {
         fs::create_dir_all(&rust).unwrap();
         fs::write(rust.join("ownership.md"), "# Ownership").unwrap();
 
-        let set = set_with(&[("main", &main, vec!["rust"]), ("rust", &rust, vec![])], "main");
+        let set = set_with(
+            &[("main", &main, vec!["rust"]), ("rust", &rust, vec![])],
+            "main",
+        );
         let r = resolve(&set, "main", "ownership", &IndexConfig::default()).unwrap();
         assert_eq!(r.wiki, "rust");
         fs::remove_dir_all(&base).ok();
@@ -785,7 +889,10 @@ mod tests {
     #[test]
     fn default_title_falls_back_through_the_documented_chain() {
         let p = Path::new("security/Heap.md");
-        assert_eq!(default_title(p, Some("---\ntitle: From Frontmatter\n---\n# H1")), "From Frontmatter");
+        assert_eq!(
+            default_title(p, Some("---\ntitle: From Frontmatter\n---\n# H1")),
+            "From Frontmatter"
+        );
         assert_eq!(default_title(p, Some("# From Heading\n")), "From Heading");
         assert_eq!(default_title(p, Some("no heading here")), "Heap");
         assert_eq!(default_title(p, None), "Heap");

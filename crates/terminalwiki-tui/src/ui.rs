@@ -4,7 +4,9 @@ use std::io::{stdout, Write};
 
 use crossterm::cursor::MoveTo;
 use crossterm::execute;
-use crossterm::style::{Color as CColor, Print, ResetColor, SetAttribute, SetForegroundColor, Attribute};
+use crossterm::style::{
+    Attribute, Color as CColor, Print, ResetColor, SetAttribute, SetForegroundColor,
+};
 use crossterm::terminal::{size as terminal_size, Clear, ClearType};
 use terminalwiki_core::sanitize::sanitize_line;
 use terminalwiki_core::unicode::{display_width, pad_display_width, truncate_display_width};
@@ -109,14 +111,29 @@ pub fn draw(app: &App) -> std::io::Result<()> {
             if let Some(ref msg) = app.status_message {
                 (format!("  {msg}"), format!("{}  ", app.current_wiki))
             } else {
-                (format!("  {}", app.current_path.display()), format!("{}  ", app.current_wiki))
+                (
+                    format!("  {}", app.current_path.display()),
+                    format!("{}  ", app.current_wiki),
+                )
             }
         }
-        Mode::Finder => ("  [Up/Down] Select  [Enter] Open  [Esc] Cancel".to_string(), "Finder  ".to_string()),
-        Mode::Outline => ("  [Up/Down] Section  [Enter] Jump  [Esc] Close".to_string(), "Outline  ".to_string()),
-        Mode::Backlinks => ("  [Up/Down] Backlink  [Enter] Open  [Esc] Close".to_string(), "Backlinks  ".to_string()),
+        Mode::Finder => (
+            "  [Up/Down] Select  [Enter] Open  [Esc] Cancel".to_string(),
+            "Finder  ".to_string(),
+        ),
+        Mode::Outline => (
+            "  [Up/Down] Section  [Enter] Jump  [Esc] Close".to_string(),
+            "Outline  ".to_string(),
+        ),
+        Mode::Backlinks => (
+            "  [Up/Down] Backlink  [Enter] Open  [Esc] Close".to_string(),
+            "Backlinks  ".to_string(),
+        ),
         Mode::Help => ("  [Esc/q/?] Close Help".to_string(), "Help  ".to_string()),
-        Mode::InPageSearch => ("  [Enter] Search  [Esc] Cancel".to_string(), "Search  ".to_string()),
+        Mode::InPageSearch => (
+            "  [Enter] Search  [Esc] Cancel".to_string(),
+            "Search  ".to_string(),
+        ),
     };
 
     let left_w = display_width(&left_text);
@@ -148,23 +165,47 @@ fn draw_minimal_finder(
     let start_y = (height.saturating_sub(dialog_h)) / 2;
 
     for y in 0..dialog_h {
-        execute!(out, MoveTo(start_x as u16, (start_y + y) as u16), SetForegroundColor(CColor::White))?;
+        execute!(
+            out,
+            MoveTo(start_x as u16, (start_y + y) as u16),
+            SetForegroundColor(CColor::White)
+        )?;
         execute!(out, Print(" ".repeat(dialog_w)))?;
     }
 
     // Prompt line
-    execute!(out, MoveTo((start_x + 2) as u16, (start_y + 1) as u16), SetForegroundColor(CColor::Cyan))?;
-    execute!(out, Print("> "), SetForegroundColor(CColor::White), Print(&app.finder_query), Print("_"))?;
+    execute!(
+        out,
+        MoveTo((start_x + 2) as u16, (start_y + 1) as u16),
+        SetForegroundColor(CColor::Cyan)
+    )?;
+    execute!(
+        out,
+        Print("> "),
+        SetForegroundColor(CColor::White),
+        Print(&app.finder_query),
+        Print("_")
+    )?;
 
     // Separator rule
-    execute!(out, MoveTo((start_x + 2) as u16, (start_y + 2) as u16), SetForegroundColor(CColor::DarkGrey))?;
+    execute!(
+        out,
+        MoveTo((start_x + 2) as u16, (start_y + 2) as u16),
+        SetForegroundColor(CColor::DarkGrey)
+    )?;
     execute!(out, Print("─".repeat(dialog_w.saturating_sub(4))))?;
 
     // Candidate list
     let list_h = dialog_h.saturating_sub(4);
     let start_idx = app.finder_selected.saturating_sub(list_h / 2);
 
-    for (i, hit) in app.finder_filtered.iter().skip(start_idx).take(list_h).enumerate() {
+    for (i, hit) in app
+        .finder_filtered
+        .iter()
+        .skip(start_idx)
+        .take(list_h)
+        .enumerate()
+    {
         let is_selected = start_idx + i == app.finder_selected;
         let row_y = start_y + 3 + i;
         execute!(out, MoveTo((start_x + 2) as u16, row_y as u16))?;
@@ -177,15 +218,30 @@ fn draw_minimal_finder(
         let meta_str = format!("{}:{}", hit.wiki, hit.relative.display());
 
         if is_selected {
-            execute!(out, SetForegroundColor(CColor::Cyan), SetAttribute(Attribute::Bold))?;
+            execute!(
+                out,
+                SetForegroundColor(CColor::Cyan),
+                SetAttribute(Attribute::Bold)
+            )?;
             let display = format!("> {}", title_str);
             let padded = pad_display_width(&display, dialog_w.saturating_sub(meta_str.len() + 6));
-            execute!(out, Print(&padded), SetAttribute(Attribute::Reset), SetForegroundColor(CColor::DarkGrey), Print(&meta_str))?;
+            execute!(
+                out,
+                Print(&padded),
+                SetAttribute(Attribute::Reset),
+                SetForegroundColor(CColor::DarkGrey),
+                Print(&meta_str)
+            )?;
         } else {
             execute!(out, SetForegroundColor(CColor::White))?;
             let display = format!("  {}", title_str);
             let padded = pad_display_width(&display, dialog_w.saturating_sub(meta_str.len() + 6));
-            execute!(out, Print(&padded), SetForegroundColor(CColor::DarkGrey), Print(&meta_str))?;
+            execute!(
+                out,
+                Print(&padded),
+                SetForegroundColor(CColor::DarkGrey),
+                Print(&meta_str)
+            )?;
         }
     }
 
@@ -209,11 +265,20 @@ fn draw_outline(
         execute!(out, Print(" ".repeat(dialog_w)))?;
     }
 
-    execute!(out, MoveTo((start_x + 2) as u16, (start_y + 1) as u16), SetForegroundColor(CColor::White), SetAttribute(Attribute::Bold))?;
+    execute!(
+        out,
+        MoveTo((start_x + 2) as u16, (start_y + 1) as u16),
+        SetForegroundColor(CColor::White),
+        SetAttribute(Attribute::Bold)
+    )?;
     execute!(out, Print("Outline"))?;
     execute!(out, SetAttribute(Attribute::Reset))?;
 
-    execute!(out, MoveTo((start_x + 2) as u16, (start_y + 2) as u16), SetForegroundColor(CColor::DarkGrey))?;
+    execute!(
+        out,
+        MoveTo((start_x + 2) as u16, (start_y + 2) as u16),
+        SetForegroundColor(CColor::DarkGrey)
+    )?;
     execute!(out, Print("─".repeat(dialog_w.saturating_sub(4))))?;
 
     let list_h = dialog_h.saturating_sub(4);
@@ -224,7 +289,11 @@ fn draw_outline(
 
         let indent = "  ".repeat(h.level.saturating_sub(1));
         if is_selected {
-            execute!(out, SetForegroundColor(CColor::Cyan), SetAttribute(Attribute::Bold))?;
+            execute!(
+                out,
+                SetForegroundColor(CColor::Cyan),
+                SetAttribute(Attribute::Bold)
+            )?;
             execute!(out, Print(format!("> {indent}{}", h.text)))?;
             execute!(out, SetAttribute(Attribute::Reset))?;
         } else {
@@ -253,11 +322,20 @@ fn draw_backlinks(
         execute!(out, Print(" ".repeat(dialog_w)))?;
     }
 
-    execute!(out, MoveTo((start_x + 2) as u16, (start_y + 1) as u16), SetForegroundColor(CColor::White), SetAttribute(Attribute::Bold))?;
+    execute!(
+        out,
+        MoveTo((start_x + 2) as u16, (start_y + 1) as u16),
+        SetForegroundColor(CColor::White),
+        SetAttribute(Attribute::Bold)
+    )?;
     execute!(out, Print(format!("Backlinks · {}", app.current_title)))?;
     execute!(out, SetAttribute(Attribute::Reset))?;
 
-    execute!(out, MoveTo((start_x + 2) as u16, (start_y + 2) as u16), SetForegroundColor(CColor::DarkGrey))?;
+    execute!(
+        out,
+        MoveTo((start_x + 2) as u16, (start_y + 2) as u16),
+        SetForegroundColor(CColor::DarkGrey)
+    )?;
     execute!(out, Print("─".repeat(dialog_w.saturating_sub(4))))?;
 
     let list_h = dialog_h.saturating_sub(4);
@@ -267,12 +345,32 @@ fn draw_backlinks(
         execute!(out, MoveTo((start_x + 2) as u16, row_y as u16))?;
 
         if is_selected {
-            execute!(out, SetForegroundColor(CColor::Cyan), SetAttribute(Attribute::Bold))?;
-            execute!(out, Print(format!("> {} ({}:{})", b.from_title, b.from_wiki, b.from_relative.display())))?;
+            execute!(
+                out,
+                SetForegroundColor(CColor::Cyan),
+                SetAttribute(Attribute::Bold)
+            )?;
+            execute!(
+                out,
+                Print(format!(
+                    "> {} ({}:{})",
+                    b.from_title,
+                    b.from_wiki,
+                    b.from_relative.display()
+                ))
+            )?;
             execute!(out, SetAttribute(Attribute::Reset))?;
         } else {
             execute!(out, SetForegroundColor(CColor::White))?;
-            execute!(out, Print(format!("  {} ({}:{})", b.from_title, b.from_wiki, b.from_relative.display())))?;
+            execute!(
+                out,
+                Print(format!(
+                    "  {} ({}:{})",
+                    b.from_title,
+                    b.from_wiki,
+                    b.from_relative.display()
+                ))
+            )?;
         }
     }
 
@@ -312,7 +410,11 @@ fn draw_help(width: usize, height: usize, out: &mut std::io::Stdout) -> std::io:
 
     for (i, line) in help_lines.iter().enumerate() {
         if 1 + i < dialog_h {
-            execute!(out, MoveTo((start_x + 2) as u16, (start_y + 1 + i) as u16), SetForegroundColor(CColor::White))?;
+            execute!(
+                out,
+                MoveTo((start_x + 2) as u16, (start_y + 1 + i) as u16),
+                SetForegroundColor(CColor::White)
+            )?;
             execute!(out, Print(line))?;
         }
     }
@@ -327,7 +429,11 @@ fn draw_search_bar(
     height: usize,
     out: &mut std::io::Stdout,
 ) -> std::io::Result<()> {
-    execute!(out, MoveTo(0, (height - 2) as u16), SetForegroundColor(CColor::Yellow))?;
+    execute!(
+        out,
+        MoveTo(0, (height - 2) as u16),
+        SetForegroundColor(CColor::Yellow)
+    )?;
     let prompt = format!(" /{}█", app.in_page_query);
     let pad = width.saturating_sub(display_width(&prompt));
     execute!(out, Print(&prompt), Print(" ".repeat(pad)), ResetColor)?;

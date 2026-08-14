@@ -46,7 +46,11 @@ pub fn doctor(_args: Args, config: Config, wikis: WikiSet) -> Result<()> {
         for wiki in wikis.iter() {
             let is_default = wikis.default_wiki().is_some_and(|d| d.name == wiki.name);
             let marker = if is_default { "* " } else { "  " };
-            let exists = if wiki.root.exists() { "" } else { " (missing!)" };
+            let exists = if wiki.root.exists() {
+                ""
+            } else {
+                " (missing!)"
+            };
             println!(
                 "{}Wiki {}  {}{}",
                 marker,
@@ -56,16 +60,16 @@ pub fn doctor(_args: Args, config: Config, wikis: WikiSet) -> Result<()> {
             );
 
             // Index status
-            let idx_status =
-                if let Some(dir) = terminalwiki_core::paths::index_dir_for(&wiki.name) {
-                    if dir.join("entries.jsonl").exists() {
-                        "built"
-                    } else {
-                        "not built"
-                    }
+            let idx_status = if let Some(dir) = terminalwiki_core::paths::index_dir_for(&wiki.name)
+            {
+                if dir.join("entries.jsonl").exists() {
+                    "built"
                 } else {
-                    "unknown"
-                };
+                    "not built"
+                }
+            } else {
+                "unknown"
+            };
             println!("  Index        {}", idx_status);
         }
     }
@@ -79,8 +83,22 @@ pub fn doctor(_args: Args, config: Config, wikis: WikiSet) -> Result<()> {
     println!("Terminal       {}", sanitize_line(&term));
     println!("TTY            {}", if is_tty { "yes" } else { "no" });
     println!("COLORTERM      {}", sanitize_line(&colorterm));
-    println!("True color     {}", if colorterm.contains("truecolor") || colorterm.contains("24bit") { "yes" } else { "unknown" });
-    println!("NO_COLOR       {}", if std::env::var_os("NO_COLOR").is_some() { "set" } else { "not set" });
+    println!(
+        "True color     {}",
+        if colorterm.contains("truecolor") || colorterm.contains("24bit") {
+            "yes"
+        } else {
+            "unknown"
+        }
+    );
+    println!(
+        "NO_COLOR       {}",
+        if std::env::var_os("NO_COLOR").is_some() {
+            "set"
+        } else {
+            "not set"
+        }
+    );
 
     // tmux
     let tmux = std::env::var("TMUX").is_ok();
@@ -93,7 +111,10 @@ pub fn doctor(_args: Args, config: Config, wikis: WikiSet) -> Result<()> {
     println!("Editor         {}", sanitize_line(&editor));
 
     // Rust version / build info
-    println!("Compiled with  rustc {}", env!("CARGO_PKG_RUST_VERSION", "unknown"));
+    println!(
+        "Compiled with  rustc {}",
+        env!("CARGO_PKG_RUST_VERSION", "unknown")
+    );
 
     Ok(())
 }

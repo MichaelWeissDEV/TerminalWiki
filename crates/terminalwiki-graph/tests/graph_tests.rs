@@ -1,7 +1,7 @@
+use std::path::PathBuf;
 use terminalwiki_graph::{
     export_dot, export_dot_subgraph, render_graph, GraphEntry, LayoutEngine, WikiGraph,
 };
-use std::path::PathBuf;
 
 fn sample_entries() -> Vec<GraphEntry> {
     vec![
@@ -49,7 +49,7 @@ fn test_build_and_links() {
     // Outgoing
     let out = graph.outgoing_links("main", &PathBuf::from("index.md"));
     assert_eq!(out.len(), 2);
-    
+
     // Backlinks
     let backs = graph.backlinks("main", &PathBuf::from("about.md"));
     assert_eq!(backs.len(), 1);
@@ -107,17 +107,15 @@ fn test_layout_edge_cases() {
     let pos = LayoutEngine::compute_layout(&graph, &sub);
     assert!(pos.is_empty());
 
-    let entries = vec![
-        GraphEntry {
-            wiki: "main".into(),
-            relative: PathBuf::from("a.md"),
-            content_type: "markdown".into(),
-            title: "A".into(),
-            tags: vec![],
-            wiki_links: vec![],
-            image_links: vec![],
-        }
-    ];
+    let entries = vec![GraphEntry {
+        wiki: "main".into(),
+        relative: PathBuf::from("a.md"),
+        content_type: "markdown".into(),
+        title: "A".into(),
+        tags: vec![],
+        wiki_links: vec![],
+        image_links: vec![],
+    }];
     let graph = WikiGraph::from_entries(&entries);
     let sub = graph.neighborhood("main", &PathBuf::from("a.md"), 1);
     let pos = LayoutEngine::compute_layout(&graph, &sub);
@@ -144,7 +142,7 @@ fn test_render_ascii() {
     let graph = WikiGraph::from_entries(&entries);
     let sub = graph.neighborhood("main", &PathBuf::from("index.md"), 2);
     let pos = LayoutEngine::compute_layout(&graph, &sub);
-    
+
     let grid = render_graph(&graph, &sub, &pos, 40, 20);
     assert_eq!(grid.len(), 20);
     assert_eq!(grid[0].len(), 40);

@@ -74,7 +74,9 @@ impl TantivyStore {
         let text_indexing = TextFieldIndexing::default()
             .set_tokenizer("default")
             .set_index_option(IndexRecordOption::WithFreqsAndPositions);
-        let text_options = TextOptions::default().set_indexing_options(text_indexing).set_stored();
+        let text_options = TextOptions::default()
+            .set_indexing_options(text_indexing)
+            .set_stored();
 
         let f_wiki = builder.add_text_field("wiki", STRING | STORED);
         let f_path = builder.add_text_field("path", STRING | STORED);
@@ -111,7 +113,9 @@ impl TantivyStore {
     pub fn open_reader(dir: &Path) -> Result<Self> {
         let tantivy_dir = dir.join("tantivy");
         if !tantivy_dir.exists() {
-            return Err(Error::index("Search index is unavailable. Run 'tw index rebuild' first."));
+            return Err(Error::index(
+                "Search index is unavailable. Run 'tw index rebuild' first.",
+            ));
         }
 
         let (
@@ -130,8 +134,11 @@ impl TantivyStore {
             f_size,
         ) = Self::build_schema();
 
-        let index = Index::open_in_dir(&tantivy_dir)
-            .map_err(|e| Error::index(format!("Failed to open index: {e}. Run 'tw index rebuild'.")))?;
+        let index = Index::open_in_dir(&tantivy_dir).map_err(|e| {
+            Error::index(format!(
+                "Failed to open index: {e}. Run 'tw index rebuild'."
+            ))
+        })?;
 
         let reader = index
             .reader_builder()
@@ -179,8 +186,9 @@ impl TantivyStore {
             f_size,
         ) = Self::build_schema();
 
-        let index = Index::open_in_dir(&tantivy_dir)
-            .unwrap_or_else(|_| Index::create_in_dir(&tantivy_dir, schema.clone()).expect("create tantivy index"));
+        let index = Index::open_in_dir(&tantivy_dir).unwrap_or_else(|_| {
+            Index::create_in_dir(&tantivy_dir, schema.clone()).expect("create tantivy index")
+        });
 
         let reader = index
             .reader_builder()
@@ -248,7 +256,9 @@ impl TantivyStore {
                 doc.add_text(self.f_tags, tag);
             }
 
-            writer.add_document(doc).map_err(|e| Error::index(e.to_string()))?;
+            writer
+                .add_document(doc)
+                .map_err(|e| Error::index(e.to_string()))?;
         }
 
         writer
@@ -272,18 +282,33 @@ impl TantivyStore {
             .map_err(|e| Error::index(format!("Search execution failed: {e}")))?;
 
         let mut hits = Vec::new();
-        let snippet_gen = SnippetGenerator::create(&searcher, &tantivy_query, self.f_body)
-            .ok();
+        let snippet_gen = SnippetGenerator::create(&searcher, &tantivy_query, self.f_body).ok();
 
         for (score, doc_address) in top_docs {
             let doc: TantivyDocument = searcher
                 .doc(doc_address)
                 .map_err(|e| Error::index(e.to_string()))?;
 
-            let wiki = doc.get_first(self.f_wiki).and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let path_str = doc.get_first(self.f_path).and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let rel_str = doc.get_first(self.f_relative).and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let title = doc.get_first(self.f_title).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let wiki = doc
+                .get_first(self.f_wiki)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let path_str = doc
+                .get_first(self.f_path)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let rel_str = doc
+                .get_first(self.f_relative)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let title = doc
+                .get_first(self.f_title)
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
 
             let snippet = if let Some(ref gen) = snippet_gen {
                 let s = gen.snippet_from_doc(&doc);
@@ -339,7 +364,10 @@ impl TantivyStore {
                         sub_clauses.push((Occur::Should, q_body));
                     }
                     if !sub_clauses.is_empty() {
-                        clauses.push((Occur::Must, Box::new(BooleanQuery::new(sub_clauses)) as Box<dyn TantivyQuery>));
+                        clauses.push((
+                            Occur::Must,
+                            Box::new(BooleanQuery::new(sub_clauses)) as Box<dyn TantivyQuery>,
+                        ));
                     }
                 }
                 QueryTerm::Tag(t) => {

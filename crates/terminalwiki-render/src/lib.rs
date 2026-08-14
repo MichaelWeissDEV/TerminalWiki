@@ -64,7 +64,11 @@ pub fn render_path(
             let len = bytes.len() as u64;
             let mtime = std::fs::metadata(path)
                 .and_then(|m| m.modified())
-                .map(|t| t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs())
+                .map(|t| {
+                    t.duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs()
+                })
                 .unwrap_or(0);
             render_binary_info(path, len, mtime)
         }
@@ -81,7 +85,11 @@ pub fn render_path(
 }
 
 /// Write rendered document to a Writer (stdout, stderr, buffer)
-pub fn write_document(doc: &RenderedDocument, out: &mut impl Write, color: ColorMode) -> std::io::Result<()> {
+pub fn write_document(
+    doc: &RenderedDocument,
+    out: &mut impl Write,
+    color: ColorMode,
+) -> std::io::Result<()> {
     for line in &doc.lines {
         for span in line {
             if color == ColorMode::Never {

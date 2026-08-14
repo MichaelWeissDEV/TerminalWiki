@@ -48,13 +48,20 @@ impl From<ExitCode> for std::process::ExitCode {
 #[derive(Debug)]
 pub enum Error {
     /// A page could not be resolved. Carries fuzzy suggestions for "did you mean".
-    PageNotFound { query: String, wiki: Option<String>, suggestions: Vec<String> },
+    PageNotFound {
+        query: String,
+        wiki: Option<String>,
+        suggestions: Vec<String>,
+    },
     /// A wiki name is not registered.
     WikiNotFound { name: String, known: Vec<String> },
     /// No wiki is configured at all.
     NoWikiConfigured,
     /// The configuration file is invalid or unreadable.
-    Config { message: String, path: Option<PathBuf> },
+    Config {
+        message: String,
+        path: Option<PathBuf>,
+    },
     /// An index could not be read, written or rebuilt.
     Index { message: String },
     /// Invalid arguments supplied by the user.
@@ -62,7 +69,10 @@ pub enum Error {
     /// A path escaped the wiki root or is otherwise refused (spec §42).
     PathRefused { path: PathBuf, reason: String },
     /// An I/O failure, annotated with the path it happened on.
-    Io { path: Option<PathBuf>, source: std::io::Error },
+    Io {
+        path: Option<PathBuf>,
+        source: std::io::Error,
+    },
     /// Anything else that is still a clean, non-panicking failure.
     Other { message: String },
 }
@@ -81,23 +91,35 @@ impl Error {
     }
 
     pub fn other(message: impl Into<String>) -> Self {
-        Error::Other { message: message.into() }
+        Error::Other {
+            message: message.into(),
+        }
     }
 
     pub fn config(message: impl Into<String>) -> Self {
-        Error::Config { message: message.into(), path: None }
+        Error::Config {
+            message: message.into(),
+            path: None,
+        }
     }
 
     pub fn index(message: impl Into<String>) -> Self {
-        Error::Index { message: message.into() }
+        Error::Index {
+            message: message.into(),
+        }
     }
 
     pub fn invalid_arguments(message: impl Into<String>) -> Self {
-        Error::InvalidArguments { message: message.into() }
+        Error::InvalidArguments {
+            message: message.into(),
+        }
     }
 
     pub fn io(path: impl Into<PathBuf>, source: std::io::Error) -> Self {
-        Error::Io { path: Some(path.into()), source }
+        Error::Io {
+            path: Some(path.into()),
+            source,
+        }
     }
 }
 
@@ -173,9 +195,16 @@ mod tests {
         assert_eq!(e.exit_code(), ExitCode::PageNotFound);
         assert_eq!(Error::config("bad").exit_code(), ExitCode::ConfigError);
         assert_eq!(Error::index("bad").exit_code(), ExitCode::IndexError);
-        assert_eq!(Error::invalid_arguments("bad").exit_code(), ExitCode::InvalidArguments);
         assert_eq!(
-            Error::WikiNotFound { name: "x".into(), known: vec![] }.exit_code(),
+            Error::invalid_arguments("bad").exit_code(),
+            ExitCode::InvalidArguments
+        );
+        assert_eq!(
+            Error::WikiNotFound {
+                name: "x".into(),
+                known: vec![]
+            }
+            .exit_code(),
             ExitCode::WikiNotFound
         );
     }

@@ -1,11 +1,11 @@
 pub mod args;
 pub mod commands;
-pub mod output;
 pub mod editor;
+pub mod output;
 
-use terminalwiki_core::ExitCode;
 use terminalwiki_core::config;
 use terminalwiki_core::wiki::WikiSet;
+use terminalwiki_core::ExitCode;
 
 /// Main entry point for the TerminalWiki CLI.
 pub fn main() -> std::process::ExitCode {

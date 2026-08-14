@@ -9,17 +9,17 @@ use std::path::PathBuf;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let count: usize = args
-        .get(1)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(1000);
+    let count: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(1000);
 
     let target_dir: PathBuf = args
         .get(2)
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(format!("target/bench_wiki_{count}")));
 
-    println!("Generating benchmark wiki with {count} pages at {} …", target_dir.display());
+    println!(
+        "Generating benchmark wiki with {count} pages at {} …",
+        target_dir.display()
+    );
 
     fs::create_dir_all(&target_dir).expect("create target dir");
 
@@ -28,12 +28,28 @@ fn main() {
     let mut f = BufWriter::new(File::create(index_file).unwrap());
     writeln!(f, "---\ntitle: Benchmark Wiki\ntags: [benchmark, root]\n---\n\n# Benchmark Knowledge Base\n\nWelcome to the benchmark wiki with {count} pages.\n").unwrap();
 
-    let subdirs = ["security", "kernel", "languages/rust", "languages/c", "algorithms", "systems"];
+    let subdirs = [
+        "security",
+        "kernel",
+        "languages/rust",
+        "languages/c",
+        "algorithms",
+        "systems",
+    ];
     for sub in &subdirs {
         fs::create_dir_all(target_dir.join(sub)).unwrap();
     }
 
-    let tags_pool = ["security", "memory", "performance", "linux", "compiler", "network", "database", "concurrency"];
+    let tags_pool = [
+        "security",
+        "memory",
+        "performance",
+        "linux",
+        "compiler",
+        "network",
+        "database",
+        "concurrency",
+    ];
 
     for i in 1..=count {
         let subdir = subdirs[i % subdirs.len()];
@@ -51,8 +67,16 @@ fn main() {
         writeln!(out, "tags: [{tag1}, {tag2}]").unwrap();
         writeln!(out, "---\n").unwrap();
         writeln!(out, "# Document {i:06}\n").unwrap();
-        writeln!(out, "This is synthetic document {i} exploring **{tag1}** and **{tag2}** principles.").unwrap();
-        writeln!(out, "Reference to related page: [[page_{link_target_idx:06}]].\n").unwrap();
+        writeln!(
+            out,
+            "This is synthetic document {i} exploring **{tag1}** and **{tag2}** principles."
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "Reference to related page: [[page_{link_target_idx:06}]].\n"
+        )
+        .unwrap();
         writeln!(out, "## Implementation Details\n").unwrap();
         writeln!(out, "```rust\nfn process_item_{i}(val: u64) -> Result<u64, String> {{\n    if val == 0 {{\n        Err(\"zero\".to_string())\n    }} else {{\n        Ok(val * 42 + {i})\n    }}\n}}\n```\n").unwrap();
     }

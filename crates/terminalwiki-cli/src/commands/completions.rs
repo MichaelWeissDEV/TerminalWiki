@@ -115,15 +115,18 @@ complete -c tw -n "__fish_use_subcommand" -a tui -d "Open interactive TUI"
 pub fn generate(shell: String) -> Result<()> {
     match shell.to_ascii_lowercase().as_str() {
         "bash" => {
-            stdout().write_all(BASH_COMPLETION.as_bytes())
+            stdout()
+                .write_all(BASH_COMPLETION.as_bytes())
                 .map_err(|e| Error::other(format!("Write error: {e}")))?;
         }
         "zsh" => {
-            stdout().write_all(ZSH_COMPLETION.as_bytes())
+            stdout()
+                .write_all(ZSH_COMPLETION.as_bytes())
                 .map_err(|e| Error::other(format!("Write error: {e}")))?;
         }
         "fish" => {
-            stdout().write_all(FISH_COMPLETION.as_bytes())
+            stdout()
+                .write_all(FISH_COMPLETION.as_bytes())
                 .map_err(|e| Error::other(format!("Write error: {e}")))?;
         }
         _ => {

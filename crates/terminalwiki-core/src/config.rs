@@ -237,7 +237,10 @@ pub struct TuiConfig {
 
 impl Default for TuiConfig {
     fn default() -> Self {
-        TuiConfig { mouse: true, history_size: 500 }
+        TuiConfig {
+            mouse: true,
+            history_size: 500,
+        }
     }
 }
 
@@ -450,7 +453,10 @@ impl WikiLocalConfig {
 
     /// Turns the wiki-local file into a configuration layer.
     pub fn layer(&self) -> ConfigLayer {
-        let mut layer = ConfigLayer { ignore: Some(self.ignore.clone()), ..Default::default() };
+        let mut layer = ConfigLayer {
+            ignore: Some(self.ignore.clone()),
+            ..Default::default()
+        };
         if let Some(r) = &self.render {
             layer.max_content_width = r.max_content_width;
             layer.line_numbers = r.line_numbers;
@@ -469,13 +475,18 @@ pub fn parse_global(text: &str, source: Option<PathBuf>) -> Result<ConfigLayer> 
         path: source.clone(),
     })?;
 
-    let mut layer = ConfigLayer { source, ..Default::default() };
+    let mut layer = ConfigLayer {
+        source,
+        ..Default::default()
+    };
     layer.default_wiki = file.default_wiki;
     layer.editor = file.editor;
 
     if let Some(t) = &file.theme {
         layer.theme = Some(Theme::parse(t).ok_or_else(|| {
-            Error::config(format!("unknown theme `{t}` (expected auto, dark, light or mono)"))
+            Error::config(format!(
+                "unknown theme `{t}` (expected auto, dark, light or mono)"
+            ))
         })?);
     }
     if let Some(n) = &file.naming {
@@ -513,7 +524,9 @@ pub fn parse_global(text: &str, source: Option<PathBuf>) -> Result<ConfigLayer> 
     if let Some(t) = file.terminal {
         if let Some(p) = &t.tmux_passthrough {
             layer.tmux_passthrough = Some(Tri::parse(p).ok_or_else(|| {
-                Error::config(format!("unknown tmux_passthrough `{p}` (expected auto, on or off)"))
+                Error::config(format!(
+                    "unknown tmux_passthrough `{p}` (expected auto, on or off)"
+                ))
             })?);
         }
     }
@@ -547,7 +560,9 @@ fn parse_toml_size(v: &toml::Value) -> Result<u64> {
         toml::Value::Integer(i) if *i >= 0 => Ok(*i as u64),
         toml::Value::String(s) => parse_size(s)
             .ok_or_else(|| Error::config(format!("cannot parse size `{s}` (try \"16 MiB\")"))),
-        other => Err(Error::config(format!("max_file_size must be a size string, got {other}"))),
+        other => Err(Error::config(format!(
+            "max_file_size must be a size string, got {other}"
+        ))),
     }
 }
 
@@ -692,11 +707,17 @@ mount = ["rust", "security"]
         let mut cfg = Config::default();
         assert_eq!(cfg.render.max_content_width, 110);
 
-        let global = ConfigLayer { max_content_width: Some(90), ..Default::default() };
+        let global = ConfigLayer {
+            max_content_width: Some(90),
+            ..Default::default()
+        };
         global.apply_to(&mut cfg);
         assert_eq!(cfg.render.max_content_width, 90);
 
-        let wiki = ConfigLayer { max_content_width: Some(70), ..Default::default() };
+        let wiki = ConfigLayer {
+            max_content_width: Some(70),
+            ..Default::default()
+        };
         wiki.apply_to(&mut cfg);
         assert_eq!(cfg.render.max_content_width, 70);
 
@@ -705,7 +726,10 @@ mount = ["rust", "security"]
         empty.apply_to(&mut cfg);
         assert_eq!(cfg.render.max_content_width, 70);
 
-        let cli = ConfigLayer { max_content_width: Some(60), ..Default::default() };
+        let cli = ConfigLayer {
+            max_content_width: Some(60),
+            ..Default::default()
+        };
         cli.apply_to(&mut cfg);
         assert_eq!(cfg.render.max_content_width, 60);
     }
@@ -713,16 +737,23 @@ mount = ["rust", "security"]
     #[test]
     fn ignore_globs_accumulate_across_layers() {
         let mut cfg = Config::default();
-        ConfigLayer { ignore: Some(vec!["target/".into()]), ..Default::default() }
-            .apply_to(&mut cfg);
-        ConfigLayer { ignore: Some(vec!["build/".into()]), ..Default::default() }
-            .apply_to(&mut cfg);
+        ConfigLayer {
+            ignore: Some(vec!["target/".into()]),
+            ..Default::default()
+        }
+        .apply_to(&mut cfg);
+        ConfigLayer {
+            ignore: Some(vec!["build/".into()]),
+            ..Default::default()
+        }
+        .apply_to(&mut cfg);
         assert_eq!(cfg.index.ignore, vec!["target/", "build/"]);
     }
 
     #[test]
     fn duplicate_wiki_names_are_rejected() {
-        let text = "[[wiki]]\nname = \"a\"\npath = \"/x\"\n\n[[wiki]]\nname = \"a\"\npath = \"/y\"\n";
+        let text =
+            "[[wiki]]\nname = \"a\"\npath = \"/x\"\n\n[[wiki]]\nname = \"a\"\npath = \"/y\"\n";
         let err = parse_global(text, None).unwrap_err();
         assert_eq!(err.exit_code(), crate::ExitCode::ConfigError);
     }
@@ -768,10 +799,16 @@ mount = ["rust", "security"]
 
     #[test]
     fn naming_policies_collapse_punctuation_runs() {
-        assert_eq!(NamingPolicy::KebabCase.apply("Use   After -- Free"), "Use-After-Free");
+        assert_eq!(
+            NamingPolicy::KebabCase.apply("Use   After -- Free"),
+            "Use-After-Free"
+        );
         assert_eq!(NamingPolicy::Slug.apply("C++ / Rust!"), "c-rust");
         // Non-ASCII must survive rather than be mangled away.
-        assert_eq!(NamingPolicy::KebabCase.apply("Größe messen"), "Größe-messen");
+        assert_eq!(
+            NamingPolicy::KebabCase.apply("Größe messen"),
+            "Größe-messen"
+        );
     }
 
     #[test]

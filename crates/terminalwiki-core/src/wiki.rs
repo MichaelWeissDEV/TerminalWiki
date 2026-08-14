@@ -56,7 +56,12 @@ impl Wiki {
         // a path that has no symlinks or `..` left in it.
         let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.clone());
         let local = WikiLocalConfig::load(&root)?;
-        Ok(Wiki { name: entry.name.clone(), root, mounts: entry.mounts.clone(), local })
+        Ok(Wiki {
+            name: entry.name.clone(),
+            root,
+            mounts: entry.mounts.clone(),
+            local,
+        })
     }
 
     /// The wiki's display title (spec §82), defaulting to its name.
@@ -226,8 +231,20 @@ impl WikiSet {
             .default_wiki
             .clone()
             .filter(|n| wikis.contains_key(n))
-            .or_else(|| config.wikis.first().map(|w| w.name.clone()).filter(|n| wikis.contains_key(n)));
-        (WikiSet { wikis, default_name }, errors)
+            .or_else(|| {
+                config
+                    .wikis
+                    .first()
+                    .map(|w| w.name.clone())
+                    .filter(|n| wikis.contains_key(n))
+            });
+        (
+            WikiSet {
+                wikis,
+                default_name,
+            },
+            errors,
+        )
     }
 
     pub fn is_empty(&self) -> bool {
@@ -278,7 +295,9 @@ impl WikiSet {
         let mut queue = std::collections::VecDeque::new();
         queue.push_back(start.to_string());
         while let Some(name) = queue.pop_front() {
-            let Some(wiki) = self.wikis.get(&name) else { continue };
+            let Some(wiki) = self.wikis.get(&name) else {
+                continue;
+            };
             if !seen.insert(&wiki.name) {
                 continue;
             }
@@ -378,7 +397,10 @@ mod tests {
         std::os::unix::fs::symlink(&outside, wiki.join("escape")).unwrap();
 
         let err = resolve_within(&wiki, Path::new("escape/secret.md")).unwrap_err();
-        assert!(matches!(err, Error::PathRefused { .. }), "symlink escape allowed: {err:?}");
+        assert!(
+            matches!(err, Error::PathRefused { .. }),
+            "symlink escape allowed: {err:?}"
+        );
 
         fs::remove_dir_all(&base).ok();
     }
@@ -410,7 +432,11 @@ mod tests {
         let base = tmpdir("home");
         // README before Home, index before everything.
         fs::write(base.join("Home.md"), "home").unwrap();
-        let entry = WikiEntry { name: "t".into(), path: base.clone(), mounts: vec![] };
+        let entry = WikiEntry {
+            name: "t".into(),
+            path: base.clone(),
+            mounts: vec![],
+        };
         let w = Wiki::open(&entry).unwrap();
         assert!(w.home_page().unwrap().ends_with("Home.md"));
 
@@ -428,7 +454,11 @@ mod tests {
     #[test]
     fn a_wiki_without_a_home_page_is_not_an_error() {
         let base = tmpdir("nohome");
-        let entry = WikiEntry { name: "t".into(), path: base.clone(), mounts: vec![] };
+        let entry = WikiEntry {
+            name: "t".into(),
+            path: base.clone(),
+            mounts: vec![],
+        };
         let w = Wiki::open(&entry).unwrap();
         assert!(w.home_page().is_none());
         fs::remove_dir_all(&base).ok();
@@ -439,7 +469,11 @@ mod tests {
         let base = tmpdir("confhome");
         fs::write(base.join("Start.md"), "start").unwrap();
         fs::write(base.join(".terminalwiki.toml"), "home = \"Start.md\"\n").unwrap();
-        let entry = WikiEntry { name: "t".into(), path: base.clone(), mounts: vec![] };
+        let entry = WikiEntry {
+            name: "t".into(),
+            path: base.clone(),
+            mounts: vec![],
+        };
         let w = Wiki::open(&entry).unwrap();
         assert!(w.home_page().unwrap().ends_with("Start.md"));
         fs::remove_dir_all(&base).ok();
@@ -448,8 +482,16 @@ mod tests {
     #[test]
     fn a_configured_home_cannot_escape_the_wiki() {
         let base = tmpdir("evilhome");
-        fs::write(base.join(".terminalwiki.toml"), "home = \"../../../etc/passwd\"\n").unwrap();
-        let entry = WikiEntry { name: "t".into(), path: base.clone(), mounts: vec![] };
+        fs::write(
+            base.join(".terminalwiki.toml"),
+            "home = \"../../../etc/passwd\"\n",
+        )
+        .unwrap();
+        let entry = WikiEntry {
+            name: "t".into(),
+            path: base.clone(),
+            mounts: vec![],
+        };
         let w = Wiki::open(&entry).unwrap();
         assert!(w.home_page().is_none(), "escaping home path was accepted");
         fs::remove_dir_all(&base).ok();
@@ -493,7 +535,11 @@ mod tests {
             ("rust", vec![]),
             ("security", vec![]),
         ]);
-        let order: Vec<&str> = set.search_order("main").iter().map(|w| w.name.as_str()).collect();
+        let order: Vec<&str> = set
+            .search_order("main")
+            .iter()
+            .map(|w| w.name.as_str())
+            .collect();
         assert_eq!(order, vec!["main", "rust", "security"]);
         fs::remove_dir_all(&base).ok();
     }
@@ -502,7 +548,11 @@ mod tests {
     fn mount_cycles_terminate() {
         // A mounts B, B mounts A. Resolution must not loop forever.
         let (set, base) = set_with(vec![("main", vec!["rust"]), ("rust", vec!["main"])]);
-        let order: Vec<&str> = set.search_order("main").iter().map(|w| w.name.as_str()).collect();
+        let order: Vec<&str> = set
+            .search_order("main")
+            .iter()
+            .map(|w| w.name.as_str())
+            .collect();
         assert_eq!(order, vec!["main", "rust"]);
         fs::remove_dir_all(&base).ok();
     }
@@ -517,7 +567,10 @@ mod tests {
     #[test]
     fn missing_mounts_are_reported_for_lint() {
         let (set, base) = set_with(vec![("main", vec!["ghost"])]);
-        assert_eq!(set.missing_mounts(), vec![("main".to_string(), "ghost".to_string())]);
+        assert_eq!(
+            set.missing_mounts(),
+            vec![("main".to_string(), "ghost".to_string())]
+        );
         fs::remove_dir_all(&base).ok();
     }
 
@@ -528,7 +581,10 @@ mod tests {
         let rust = set.get("rust").unwrap();
         fs::write(rust.root.join("ownership.md"), "# Ownership").unwrap();
         let main = set.get("main").unwrap();
-        assert!(!main.root.join("ownership.md").exists(), "mount copied a file");
+        assert!(
+            !main.root.join("ownership.md").exists(),
+            "mount copied a file"
+        );
         assert!(rust.root.join("ownership.md").exists());
         fs::remove_dir_all(&base).ok();
     }
@@ -540,8 +596,16 @@ mod tests {
         let inner = outer.join("inner");
         fs::create_dir_all(&inner).unwrap();
         let mut cfg = Config::default();
-        cfg.wikis.push(WikiEntry { name: "outer".into(), path: outer.clone(), mounts: vec![] });
-        cfg.wikis.push(WikiEntry { name: "inner".into(), path: inner.clone(), mounts: vec![] });
+        cfg.wikis.push(WikiEntry {
+            name: "outer".into(),
+            path: outer.clone(),
+            mounts: vec![],
+        });
+        cfg.wikis.push(WikiEntry {
+            name: "inner".into(),
+            path: inner.clone(),
+            mounts: vec![],
+        });
         let (set, _) = WikiSet::open(&cfg);
         let found = set.wiki_for_path(&inner.join("page.md")).unwrap();
         assert_eq!(found.name, "inner");

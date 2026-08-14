@@ -88,7 +88,11 @@ pub fn index_file(
     let size = metadata.len();
     let mtime = metadata
         .modified()
-        .map(|t| t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs())
+        .map(|t| {
+            t.duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+        })
         .unwrap_or(0);
 
     let relative = path
@@ -146,14 +150,28 @@ pub fn index_file(
                 .file_stem()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_default();
-            (sanitize_text(&title), Vec::new(), Vec::new(), Vec::new(), sanitize_text(&text), Vec::new())
+            (
+                sanitize_text(&title),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                sanitize_text(&text),
+                Vec::new(),
+            )
         }
         ContentType::Image | ContentType::Binary => {
             let title = path
                 .file_stem()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_default();
-            (sanitize_text(&title), Vec::new(), Vec::new(), Vec::new(), String::new(), Vec::new())
+            (
+                sanitize_text(&title),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                String::new(),
+                Vec::new(),
+            )
         }
     };
 
@@ -210,10 +228,7 @@ pub fn update_index(
     let results: Vec<Result<Option<IndexEntry>>> = paths
         .par_iter()
         .map(|path| {
-            let rel = path
-                .strip_prefix(&wiki.root)
-                .unwrap_or(path)
-                .to_path_buf();
+            let rel = path.strip_prefix(&wiki.root).unwrap_or(path).to_path_buf();
             let existing = existing_map.get(&rel);
             index_file(&wiki.name, &wiki.root, path, existing)
         })

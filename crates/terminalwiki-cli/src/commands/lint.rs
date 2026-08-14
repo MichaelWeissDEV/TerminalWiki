@@ -36,9 +36,8 @@ pub fn lint(_args: Args, config: Config, wikis: WikiSet) -> Result<()> {
             }
 
             // Read with size limit.
-            let (bytes, _truncated) =
-                read_limited(&file.path, config.index.max_file_size)
-                    .map_err(|e| Error::io(&file.path, e))?;
+            let (bytes, _truncated) = read_limited(&file.path, config.index.max_file_size)
+                .map_err(|e| Error::io(&file.path, e))?;
 
             let text = String::from_utf8_lossy(&bytes);
 

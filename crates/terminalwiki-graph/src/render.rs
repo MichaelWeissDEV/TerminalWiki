@@ -20,10 +20,18 @@ pub fn render_graph(
     let mut max_y = f64::MIN;
 
     for &(x, y) in pos.values() {
-        if x < min_x { min_x = x; }
-        if x > max_x { max_x = x; }
-        if y < min_y { min_y = y; }
-        if y > max_y { max_y = y; }
+        if x < min_x {
+            min_x = x;
+        }
+        if x > max_x {
+            max_x = x;
+        }
+        if y < min_y {
+            min_y = y;
+        }
+        if y > max_y {
+            max_y = y;
+        }
     }
 
     // Add padding
@@ -35,8 +43,16 @@ pub fn render_graph(
 
     let rx = max_x - min_x;
     let ry = max_y - min_y;
-    let scale_x = if rx > 0.0 { (width as f64 - 1.0) / rx } else { 1.0 };
-    let scale_y = if ry > 0.0 { (height as f64 - 1.0) / ry } else { 1.0 };
+    let scale_x = if rx > 0.0 {
+        (width as f64 - 1.0) / rx
+    } else {
+        1.0
+    };
+    let scale_y = if ry > 0.0 {
+        (height as f64 - 1.0) / ry
+    } else {
+        1.0
+    };
 
     let mut grid = vec![vec![' '; width]; height];
 
@@ -66,11 +82,7 @@ pub fn render_graph(
         if let Some(&(x, y)) = pos.get(&n_idx) {
             let (gx, gy) = to_grid(x, y);
             if gx >= 0 && gx < width as isize && gy >= 0 && gy < height as isize {
-                let char_repr = if n_idx == sub.center {
-                    '●'
-                } else {
-                    '•'
-                };
+                let char_repr = if n_idx == sub.center { '●' } else { '•' };
                 grid[gy as usize][gx as usize] = char_repr;
 
                 // Add label if possible
@@ -89,7 +101,9 @@ pub fn render_graph(
         }
     }
 
-    grid.into_iter().map(|row| row.into_iter().collect()).collect()
+    grid.into_iter()
+        .map(|row| row.into_iter().collect())
+        .collect()
 }
 
 fn draw_line(grid: &mut [Vec<char>], mut x0: isize, mut y0: isize, x1: isize, y1: isize) {
@@ -100,7 +114,11 @@ fn draw_line(grid: &mut [Vec<char>], mut x0: isize, mut y0: isize, x1: isize, y1
     let mut err = dx + dy;
 
     let height = grid.len() as isize;
-    let width = if height > 0 { grid[0].len() as isize } else { 0 };
+    let width = if height > 0 {
+        grid[0].len() as isize
+    } else {
+        0
+    };
 
     loop {
         let ch = if dx > -dy {
@@ -111,7 +129,8 @@ fn draw_line(grid: &mut [Vec<char>], mut x0: isize, mut y0: isize, x1: isize, y1
             '·'
         };
 
-        if x0 >= 0 && x0 < width && y0 >= 0 && y0 < height && grid[y0 as usize][x0 as usize] == ' ' {
+        if x0 >= 0 && x0 < width && y0 >= 0 && y0 < height && grid[y0 as usize][x0 as usize] == ' '
+        {
             grid[y0 as usize][x0 as usize] = ch;
         }
 

@@ -1,5 +1,5 @@
 use crate::document::{RenderedDocument, Span};
-use crate::theme::{Theme, SemanticColor};
+use crate::theme::{SemanticColor, Theme};
 
 pub fn render_binary_info(path: &std::path::Path, size: u64, _mtime: u64) -> RenderedDocument {
     let mut doc = RenderedDocument {
@@ -10,7 +10,7 @@ pub fn render_binary_info(path: &std::path::Path, size: u64, _mtime: u64) -> Ren
     let theme = Theme::Dark; // Default fallback
     doc.lines.push(vec![Span {
         text: format!("Binary file: {} ({} bytes)", path.display(), size),
-        style: theme.style(SemanticColor::Foreground)
+        style: theme.style(SemanticColor::Foreground),
     }]);
     doc
 }

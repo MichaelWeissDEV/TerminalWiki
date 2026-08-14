@@ -65,7 +65,7 @@ mod tests {
         assert_eq!(display_width("hello"), 5);
         assert_eq!(display_width("Größe"), 5);
         assert_eq!(display_width("漢字"), 4); // CJK characters are 2 columns each
-        assert_eq!(display_width("🦀"), 2);    // Emoji
+        assert_eq!(display_width("🦀"), 2); // Emoji
     }
 
     #[test]

@@ -54,8 +54,14 @@ pub enum Inline {
     Italic(Vec<Inline>),
     Strike(Vec<Inline>),
     Code(String),
-    Link { target: String, text: Vec<Inline> },
-    WikiLink { target: String, label: Option<String> },
+    Link {
+        target: String,
+        text: Vec<Inline>,
+    },
+    WikiLink {
+        target: String,
+        label: Option<String>,
+    },
     Footnote(String),
     Math(String),
 }
@@ -78,14 +84,34 @@ impl Inline {
 pub enum Block {
     Heading(usize, Vec<Inline>),
     Paragraph(Vec<Inline>),
-    CodeBlock { language: Option<String>, content: String },
-    List { ordered: bool, start: Option<u64>, items: Vec<Vec<Block>> },
-    TaskItem { checked: bool, content: Vec<Inline> },
+    CodeBlock {
+        language: Option<String>,
+        content: String,
+    },
+    List {
+        ordered: bool,
+        start: Option<u64>,
+        items: Vec<Vec<Block>>,
+    },
+    TaskItem {
+        checked: bool,
+        content: Vec<Inline>,
+    },
     BlockQuote(Vec<Block>),
-    Callout { kind: String, title: Option<String>, content: Vec<Block> },
-    Table { headers: Vec<Vec<Inline>>, rows: Vec<Vec<Vec<Inline>>> },
+    Callout {
+        kind: String,
+        title: Option<String>,
+        content: Vec<Block>,
+    },
+    Table {
+        headers: Vec<Vec<Inline>>,
+        rows: Vec<Vec<Vec<Inline>>>,
+    },
     HorizontalRule,
-    Image { alt: String, url: String },
+    Image {
+        alt: String,
+        url: String,
+    },
     Math(String),
 }
 

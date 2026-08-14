@@ -17,20 +17,34 @@ pub fn resolve_editor(config: &Config) -> String {
 /// Resolves the editor from env vars and $PATH only, without a config.
 pub fn resolve_editor_no_config() -> String {
     if let Ok(ed) = env::var("TW_EDITOR") {
-        if !ed.is_empty() { return ed; }
+        if !ed.is_empty() {
+            return ed;
+        }
     }
     if let Ok(ed) = env::var("VISUAL") {
-        if !ed.is_empty() { return ed; }
+        if !ed.is_empty() {
+            return ed;
+        }
     }
     if let Ok(ed) = env::var("EDITOR") {
-        if !ed.is_empty() { return ed; }
+        if !ed.is_empty() {
+            return ed;
+        }
     }
     // Fallbacks
-    if is_in_path("nvim") { return "nvim".to_string(); }
-    if is_in_path("vim") { return "vim".to_string(); }
-    if is_in_path("vi") { return "vi".to_string(); }
-    if is_in_path("nano") { return "nano".to_string(); }
-    
+    if is_in_path("nvim") {
+        return "nvim".to_string();
+    }
+    if is_in_path("vim") {
+        return "vim".to_string();
+    }
+    if is_in_path("vi") {
+        return "vi".to_string();
+    }
+    if is_in_path("nano") {
+        return "nano".to_string();
+    }
+
     // Last resort fallback
     "vi".to_string()
 }
@@ -72,7 +86,7 @@ impl IsExecutable for Path {
 
 pub fn open_editor(path: &Path, config: &Config) -> Result<()> {
     let editor = resolve_editor(config);
-    
+
     // Handle case where editor might contain arguments like `code -w`
     let parts: Vec<&str> = editor.split_whitespace().collect();
     if parts.is_empty() {
@@ -85,12 +99,15 @@ pub fn open_editor(path: &Path, config: &Config) -> Result<()> {
     }
     cmd.arg(path);
 
-    let status = cmd.status().map_err(|e| {
-        Error::other(format!("Failed to execute editor '{}': {}", editor, e))
-    })?;
+    let status = cmd
+        .status()
+        .map_err(|e| Error::other(format!("Failed to execute editor '{}': {}", editor, e)))?;
 
     if !status.success() {
-        return Err(Error::other(format!("Editor exited with status: {}", status)));
+        return Err(Error::other(format!(
+            "Editor exited with status: {}",
+            status
+        )));
     }
 
     Ok(())

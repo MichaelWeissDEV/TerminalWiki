@@ -31,10 +31,14 @@ pub fn search(query: String, args: Args, _config: Config, wikis: WikiSet) -> Res
 
     // Mutually exclusive flag validation (Phase 34)
     if args.json && args.jsonl {
-        return Err(Error::invalid_arguments("Flags --json and --jsonl are mutually exclusive."));
+        return Err(Error::invalid_arguments(
+            "Flags --json and --jsonl are mutually exclusive.",
+        ));
     }
     if args.path_only && (args.json || args.jsonl) {
-        return Err(Error::invalid_arguments("Flag --path-only cannot be combined with --json or --jsonl."));
+        return Err(Error::invalid_arguments(
+            "Flag --path-only cannot be combined with --json or --jsonl.",
+        ));
     }
 
     let q = terminalwiki_index::Query::from_str(&query)
@@ -54,8 +58,12 @@ pub fn search(query: String, args: Args, _config: Config, wikis: WikiSet) -> Res
     let mut any_hits = false;
 
     for wiki in target_wikis {
-        let idx = terminalwiki_index::WikiIndex::load(&wiki.name)
-            .map_err(|e| Error::index(format!("Search index for '{}' is unavailable: {e}. Run 'tw index rebuild'.", wiki.name)))?;
+        let idx = terminalwiki_index::WikiIndex::load(&wiki.name).map_err(|e| {
+            Error::index(format!(
+                "Search index for '{}' is unavailable: {e}. Run 'tw index rebuild'.",
+                wiki.name
+            ))
+        })?;
 
         let hits = idx.search(&q)?;
 
@@ -91,7 +99,11 @@ pub fn search(query: String, args: Args, _config: Config, wikis: WikiSet) -> Res
                 });
             } else {
                 println!("{}", sanitize_line(&clean_title));
-                println!("  {}:{}", sanitize_line(&hit.wiki), sanitize_line(&path_str));
+                println!(
+                    "  {}:{}",
+                    sanitize_line(&hit.wiki),
+                    sanitize_line(&path_str)
+                );
                 if let Some(ref snippet) = hit.snippet {
                     println!("  {}", sanitize_line(snippet));
                 }

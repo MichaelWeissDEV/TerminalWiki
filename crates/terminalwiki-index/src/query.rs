@@ -143,7 +143,10 @@ mod tests {
         let q = Query::from_str("tag:security -tag:web heap").unwrap();
         assert_eq!(q.terms.len(), 3);
         assert_eq!(q.terms[0], QueryTerm::Tag("security".into()));
-        assert_eq!(q.terms[1], QueryTerm::Not(Box::new(QueryTerm::Tag("web".into()))));
+        assert_eq!(
+            q.terms[1],
+            QueryTerm::Not(Box::new(QueryTerm::Tag("web".into())))
+        );
         assert_eq!(q.terms[2], QueryTerm::Text("heap".into()));
     }
 

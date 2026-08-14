@@ -38,7 +38,10 @@ pub fn parse_markdown(text: &str) -> Document {
             Event::End(TagEnd::Heading(_)) => {
                 if let Some(level) = current_heading_level.take() {
                     let inlines = inline_stack.pop().unwrap_or_default();
-                    block_stack.last_mut().unwrap().push(Block::Heading(level, inlines));
+                    block_stack
+                        .last_mut()
+                        .unwrap()
+                        .push(Block::Heading(level, inlines));
                 }
             }
 
@@ -54,7 +57,9 @@ pub fn parse_markdown(text: &str) -> Document {
                     if let Some(rest) = plain.strip_prefix("[!") {
                         if let Some((kind, _)) = rest.split_once(']') {
                             let kind_upper = kind.to_ascii_uppercase();
-                            if ["NOTE", "TIP", "WARNING", "CAUTION", "IMPORTANT"].contains(&kind_upper.as_str()) {
+                            if ["NOTE", "TIP", "WARNING", "CAUTION", "IMPORTANT"]
+                                .contains(&kind_upper.as_str())
+                            {
                                 block_stack.last_mut().unwrap().push(Block::Callout {
                                     kind: kind_upper,
                                     title: None,
@@ -64,7 +69,10 @@ pub fn parse_markdown(text: &str) -> Document {
                             }
                         }
                     }
-                    block_stack.last_mut().unwrap().push(Block::Paragraph(inlines));
+                    block_stack
+                        .last_mut()
+                        .unwrap()
+                        .push(Block::Paragraph(inlines));
                 }
             }
 
@@ -73,7 +81,11 @@ pub fn parse_markdown(text: &str) -> Document {
                 let lang = match kind {
                     CodeBlockKind::Fenced(l) => {
                         let s = l.trim().to_string();
-                        if s.is_empty() { None } else { Some(s) }
+                        if s.is_empty() {
+                            None
+                        } else {
+                            Some(s)
+                        }
                     }
                     CodeBlockKind::Indented => None,
                 };
@@ -95,7 +107,10 @@ pub fn parse_markdown(text: &str) -> Document {
             }
             Event::End(TagEnd::BlockQuote(_)) => {
                 let blocks = block_stack.pop().unwrap_or_default();
-                block_stack.last_mut().unwrap().push(Block::BlockQuote(blocks));
+                block_stack
+                    .last_mut()
+                    .unwrap()
+                    .push(Block::BlockQuote(blocks));
             }
 
             // ─── Lists ───────────────────────────────────────────────────────────
@@ -121,7 +136,10 @@ pub fn parse_markdown(text: &str) -> Document {
             Event::End(TagEnd::Item) => {
                 let inlines = inline_stack.pop().unwrap_or_default();
                 if !inlines.is_empty() {
-                    block_stack.last_mut().unwrap().push(Block::Paragraph(inlines));
+                    block_stack
+                        .last_mut()
+                        .unwrap()
+                        .push(Block::Paragraph(inlines));
                 }
             }
 
@@ -166,7 +184,10 @@ pub fn parse_markdown(text: &str) -> Document {
             }
             Event::End(TagEnd::Emphasis) => {
                 let inlines = inline_stack.pop().unwrap_or_default();
-                inline_stack.last_mut().unwrap().push(Inline::Italic(inlines));
+                inline_stack
+                    .last_mut()
+                    .unwrap()
+                    .push(Inline::Italic(inlines));
             }
             Event::Start(Tag::Strong) => {
                 inline_stack.push(Vec::new());
@@ -180,7 +201,10 @@ pub fn parse_markdown(text: &str) -> Document {
             }
             Event::End(TagEnd::Strikethrough) => {
                 let inlines = inline_stack.pop().unwrap_or_default();
-                inline_stack.last_mut().unwrap().push(Inline::Strike(inlines));
+                inline_stack
+                    .last_mut()
+                    .unwrap()
+                    .push(Inline::Strike(inlines));
             }
             Event::Start(Tag::Link { dest_url, .. }) => {
                 inline_stack.push(Vec::new());
@@ -219,20 +243,32 @@ pub fn parse_markdown(text: &str) -> Document {
                 }
             }
             Event::Code(t) => {
-                inline_stack.last_mut().unwrap().push(Inline::Code(t.to_string()));
+                inline_stack
+                    .last_mut()
+                    .unwrap()
+                    .push(Inline::Code(t.to_string()));
             }
             Event::Rule => {
                 block_stack.last_mut().unwrap().push(Block::HorizontalRule);
             }
             Event::TaskListMarker(checked) => {
                 let marker = if checked { "[x] " } else { "[ ] " };
-                inline_stack.last_mut().unwrap().push(Inline::Text(marker.to_string()));
+                inline_stack
+                    .last_mut()
+                    .unwrap()
+                    .push(Inline::Text(marker.to_string()));
             }
             Event::FootnoteReference(name) => {
-                inline_stack.last_mut().unwrap().push(Inline::Footnote(format!("[^{name}]")));
+                inline_stack
+                    .last_mut()
+                    .unwrap()
+                    .push(Inline::Footnote(format!("[^{name}]")));
             }
             Event::SoftBreak | Event::HardBreak => {
-                inline_stack.last_mut().unwrap().push(Inline::Text(" ".to_string()));
+                inline_stack
+                    .last_mut()
+                    .unwrap()
+                    .push(Inline::Text(" ".to_string()));
             }
             _ => {}
         }
@@ -273,5 +309,148 @@ fn parse_wiki_links_in_text(text: &str, inlines: &mut Vec<Inline>) {
     }
     if cursor < text.len() {
         inlines.push(Inline::Text(text[cursor..].to_string()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::document::{Block, Inline};
+
+    #[test]
+    fn test_heading_and_paragraph() {
+        let md = "# Memory Management\n\nExploiting the glibc heap.";
+        let doc = parse_markdown(md);
+        assert_eq!(doc.blocks.len(), 2);
+        match &doc.blocks[0] {
+            Block::Heading(1, inlines) => {
+                assert_eq!(inlines[0], Inline::Text("Memory Management".into()));
+            }
+            _ => panic!("Expected Heading(1, ..)"),
+        }
+        match &doc.blocks[1] {
+            Block::Paragraph(inlines) => {
+                assert_eq!(
+                    inlines[0],
+                    Inline::Text("Exploiting the glibc heap.".into())
+                );
+            }
+            _ => panic!("Expected Paragraph"),
+        }
+    }
+
+    #[test]
+    fn test_bold_italic_and_nested() {
+        let md = "Normal **bold text** and *italic text* and ***bold italic***.";
+        let doc = parse_markdown(md);
+        assert_eq!(doc.blocks.len(), 1);
+        if let Block::Paragraph(inlines) = &doc.blocks[0] {
+            assert!(inlines.iter().any(|i| matches!(i, Inline::Bold(_))));
+            assert!(inlines.iter().any(|i| matches!(i, Inline::Italic(_))));
+        } else {
+            panic!("Expected paragraph");
+        }
+    }
+
+    #[test]
+    fn test_inline_code_and_links() {
+        let md = "Call `malloc(size)` or visit [docs](https://example.org).";
+        let doc = parse_markdown(md);
+        assert_eq!(doc.blocks.len(), 1);
+        if let Block::Paragraph(inlines) = &doc.blocks[0] {
+            assert_eq!(inlines[1], Inline::Code("malloc(size)".into()));
+            assert!(
+                matches!(&inlines[3], Inline::Link { target, .. } if target == "https://example.org")
+            );
+        } else {
+            panic!("Expected paragraph");
+        }
+    }
+
+    #[test]
+    fn test_wiki_links_and_aliases() {
+        let md = "See [[Heap]] and [[Heap|Heap Exploitation]] for details.";
+        let doc = parse_markdown(md);
+        assert_eq!(doc.blocks.len(), 1);
+        if let Block::Paragraph(inlines) = &doc.blocks[0] {
+            assert_eq!(inlines[0], Inline::Text("See ".into()));
+            assert_eq!(
+                inlines[1],
+                Inline::WikiLink {
+                    target: "Heap".into(),
+                    label: None,
+                }
+            );
+            assert_eq!(inlines[2], Inline::Text(" and ".into()));
+            assert_eq!(
+                inlines[3],
+                Inline::WikiLink {
+                    target: "Heap".into(),
+                    label: Some("Heap Exploitation".into()),
+                }
+            );
+            assert_eq!(inlines[4], Inline::Text(" for details.".into()));
+        } else {
+            panic!("Expected paragraph");
+        }
+    }
+
+    #[test]
+    fn test_lists_and_tasks() {
+        let md = "- [ ] Task 1\n- [x] Task 2\n- Item 3";
+        let doc = parse_markdown(md);
+        assert_eq!(doc.blocks.len(), 1);
+        assert!(matches!(&doc.blocks[0], Block::List { .. }));
+    }
+
+    #[test]
+    fn test_code_blocks() {
+        let md = "```rust\nfn main() {\n    println!(\"hi\");\n}\n```";
+        let doc = parse_markdown(md);
+        assert_eq!(doc.blocks.len(), 1);
+        match &doc.blocks[0] {
+            Block::CodeBlock { language, content } => {
+                assert_eq!(language.as_deref(), Some("rust"));
+                assert!(content.contains("println!(\"hi\");"));
+            }
+            _ => panic!("Expected CodeBlock"),
+        }
+    }
+
+    #[test]
+    fn test_callouts() {
+        let md = "> [!NOTE]\n> Important security note.";
+        let doc = parse_markdown(md);
+        assert_eq!(doc.blocks.len(), 1);
+        match &doc.blocks[0] {
+            Block::BlockQuote(inner) | Block::Callout { content: inner, .. } => {
+                assert!(!inner.is_empty());
+            }
+            _ => panic!("Expected Callout or BlockQuote"),
+        }
+    }
+
+    #[test]
+    fn test_tables() {
+        let md = "| Header A | Header B |\n|---|---|\n| Cell 1 | Cell 2 |";
+        let doc = parse_markdown(md);
+        assert_eq!(doc.blocks.len(), 1);
+        match &doc.blocks[0] {
+            Block::Table { headers, rows } => {
+                assert_eq!(headers.len(), 2);
+                assert_eq!(rows.len(), 1);
+            }
+            _ => panic!("Expected Table"),
+        }
+    }
+
+    #[test]
+    fn test_complex_combination() {
+        let md =
+            "# Heap\n\nSee **[[Malloc|the allocator]]** and [`malloc()`](https://example.invalid).";
+        let doc = parse_markdown(md);
+        assert_eq!(doc.blocks.len(), 2);
+        assert!(matches!(&doc.blocks[0], Block::Heading(1, _)));
+        assert!(matches!(&doc.blocks[1], Block::Paragraph(_)));
     }
 }

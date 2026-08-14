@@ -152,7 +152,8 @@ const CODE_FILENAMES: &[(&str, &str)] = &[
 
 /// Returns the lowercase extension of `path`, if any.
 pub fn extension(path: &Path) -> Option<String> {
-    path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase())
+    path.extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
 }
 
 /// The highlighting language name for a path, if it is recognised as code.
@@ -163,7 +164,10 @@ pub fn language_for(path: &Path) -> Option<&'static str> {
         }
     }
     let ext = extension(path)?;
-    CODE_LANGUAGES.iter().find(|(e, _)| *e == ext).map(|(_, lang)| *lang)
+    CODE_LANGUAGES
+        .iter()
+        .find(|(e, _)| *e == ext)
+        .map(|(_, lang)| *lang)
 }
 
 /// The highlighting language name for a fenced-code-block info string (spec §30).
@@ -337,18 +341,39 @@ mod tests {
 
     #[test]
     fn markdown_and_code_are_classified_by_extension() {
-        assert_eq!(classify_by_extension(&PathBuf::from("a.md")), Some(ContentType::Markdown));
-        assert_eq!(classify_by_extension(&PathBuf::from("a.rs")), Some(ContentType::Code));
-        assert_eq!(classify_by_extension(&PathBuf::from("a.png")), Some(ContentType::Image));
-        assert_eq!(classify_by_extension(&PathBuf::from("a.tex")), Some(ContentType::Latex));
-        assert_eq!(classify_by_extension(&PathBuf::from("a.txt")), Some(ContentType::Text));
+        assert_eq!(
+            classify_by_extension(&PathBuf::from("a.md")),
+            Some(ContentType::Markdown)
+        );
+        assert_eq!(
+            classify_by_extension(&PathBuf::from("a.rs")),
+            Some(ContentType::Code)
+        );
+        assert_eq!(
+            classify_by_extension(&PathBuf::from("a.png")),
+            Some(ContentType::Image)
+        );
+        assert_eq!(
+            classify_by_extension(&PathBuf::from("a.tex")),
+            Some(ContentType::Latex)
+        );
+        assert_eq!(
+            classify_by_extension(&PathBuf::from("a.txt")),
+            Some(ContentType::Text)
+        );
         assert_eq!(classify_by_extension(&PathBuf::from("a.unknownext")), None);
     }
 
     #[test]
     fn makefiles_are_code_without_an_extension() {
-        assert_eq!(language_for(&PathBuf::from("/x/Makefile")), Some("Makefile"));
-        assert_eq!(language_for(&PathBuf::from("/x/Dockerfile")), Some("Dockerfile"));
+        assert_eq!(
+            language_for(&PathBuf::from("/x/Makefile")),
+            Some("Makefile")
+        );
+        assert_eq!(
+            language_for(&PathBuf::from("/x/Dockerfile")),
+            Some("Dockerfile")
+        );
     }
 
     #[test]
@@ -377,7 +402,10 @@ mod tests {
         let mut data = vec![b'a'; SNIFF_LEN - 1];
         data.extend_from_slice("漢".as_bytes()); // 3 bytes, split at the window
         data.extend(std::iter::repeat_n(b'b', 100));
-        assert!(!looks_binary(&data), "truncated multi-byte char misread as binary");
+        assert!(
+            !looks_binary(&data),
+            "truncated multi-byte char misread as binary"
+        );
     }
 
     #[test]

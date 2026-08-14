@@ -129,13 +129,17 @@ pub fn scan(wiki: &Wiki, config: &IndexConfig) -> Vec<ScannedFile> {
         }) {
             continue;
         }
-        let Some(name) = path.file_name() else { continue };
+        let Some(name) = path.file_name() else {
+            continue;
+        };
         if name == crate::config::WIKI_CONFIG_FILE || name == IGNORE_FILE {
             continue;
         }
 
         let Ok(meta) = entry.metadata() else { continue };
-        let Ok(relative) = path.strip_prefix(&wiki.root) else { continue };
+        let Ok(relative) = path.strip_prefix(&wiki.root) else {
+            continue;
+        };
 
         let content_type = filetype::classify_by_extension(path).unwrap_or(ContentType::Text);
         if content_type == ContentType::Code && !config.code {
@@ -178,7 +182,10 @@ pub fn read_limited(path: &Path, limit: u64) -> std::io::Result<(Vec<u8>, bool)>
 
 /// Wall-clock helper used by the index to record when it last ran.
 pub fn now_secs() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -200,12 +207,19 @@ mod tests {
     }
 
     fn open(base: &Path) -> Wiki {
-        Wiki::open(&WikiEntry { name: "t".into(), path: base.to_path_buf(), mounts: vec![] })
-            .unwrap()
+        Wiki::open(&WikiEntry {
+            name: "t".into(),
+            path: base.to_path_buf(),
+            mounts: vec![],
+        })
+        .unwrap()
     }
 
     fn names(files: &[ScannedFile]) -> Vec<String> {
-        files.iter().map(|f| f.relative.to_string_lossy().replace('\\', "/")).collect()
+        files
+            .iter()
+            .map(|f| f.relative.to_string_lossy().replace('\\', "/"))
+            .collect()
     }
 
     #[test]
@@ -217,7 +231,10 @@ mod tests {
         fs::write(base.join("allocator.rs"), "fn main() {}").unwrap();
 
         let files = scan(&open(&base), &IndexConfig::default());
-        assert_eq!(names(&files), vec!["Security/Heap.md", "allocator.rs", "index.md"]);
+        assert_eq!(
+            names(&files),
+            vec!["Security/Heap.md", "allocator.rs", "index.md"]
+        );
         fs::remove_dir_all(&base).ok();
     }
 
@@ -268,7 +285,10 @@ mod tests {
         fs::write(base.join(".git/COMMIT_EDITMSG"), "x").unwrap();
         fs::write(base.join("a.md"), "x").unwrap();
 
-        let cfg = IndexConfig { hidden: true, ..Default::default() };
+        let cfg = IndexConfig {
+            hidden: true,
+            ..Default::default()
+        };
         let files = scan(&open(&base), &cfg);
         assert_eq!(names(&files), vec!["a.md"]);
         fs::remove_dir_all(&base).ok();
@@ -280,7 +300,10 @@ mod tests {
         fs::write(base.join(".terminalwiki.toml"), "title = \"x\"\n").unwrap();
         fs::write(base.join(IGNORE_FILE), "\n").unwrap();
         fs::write(base.join("a.md"), "x").unwrap();
-        let cfg = IndexConfig { hidden: true, ..Default::default() };
+        let cfg = IndexConfig {
+            hidden: true,
+            ..Default::default()
+        };
         let files = scan(&open(&base), &cfg);
         assert_eq!(names(&files), vec!["a.md"]);
         fs::remove_dir_all(&base).ok();
@@ -292,12 +315,21 @@ mod tests {
         fs::write(base.join("big.md"), vec![b'x'; 4096]).unwrap();
         fs::write(base.join("small.md"), "x").unwrap();
 
-        let cfg = IndexConfig { max_file_size: 1024, ..Default::default() };
+        let cfg = IndexConfig {
+            max_file_size: 1024,
+            ..Default::default()
+        };
         let files = scan(&open(&base), &cfg);
-        let big = files.iter().find(|f| f.relative.ends_with("big.md")).unwrap();
+        let big = files
+            .iter()
+            .find(|f| f.relative.ends_with("big.md"))
+            .unwrap();
         assert!(big.too_large, "large file must be flagged");
         assert!(!big.should_index_content());
-        let small = files.iter().find(|f| f.relative.ends_with("small.md")).unwrap();
+        let small = files
+            .iter()
+            .find(|f| f.relative.ends_with("small.md"))
+            .unwrap();
         assert!(small.should_index_content());
         fs::remove_dir_all(&base).ok();
     }
@@ -307,7 +339,10 @@ mod tests {
         let base = tmpdir("nocode");
         fs::write(base.join("a.md"), "x").unwrap();
         fs::write(base.join("b.rs"), "x").unwrap();
-        let cfg = IndexConfig { code: false, ..Default::default() };
+        let cfg = IndexConfig {
+            code: false,
+            ..Default::default()
+        };
         let files = scan(&open(&base), &cfg);
         assert_eq!(names(&files), vec!["a.md"]);
         fs::remove_dir_all(&base).ok();

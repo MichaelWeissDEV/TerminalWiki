@@ -7,7 +7,10 @@ use crate::args::Args;
 
 pub fn show(_args: Args, config: Config, _wikis: WikiSet) -> Result<()> {
     println!("# TerminalWiki active configuration");
-    println!("default_wiki = {:?}", config.default_wiki.as_deref().unwrap_or(""));
+    println!(
+        "default_wiki = {:?}",
+        config.default_wiki.as_deref().unwrap_or("")
+    );
     println!("editor = {:?}", config.editor.as_deref().unwrap_or(""));
     println!("theme = {:?}", config.theme);
     println!("naming = {:?}", config.naming);

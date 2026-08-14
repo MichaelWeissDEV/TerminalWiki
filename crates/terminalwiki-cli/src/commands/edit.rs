@@ -15,7 +15,7 @@ pub fn edit(page: String, args: Args, config: Config, wikis: WikiSet) -> Result<
     let start_wiki = args
         .wiki
         .or_else(|| wikis.default_wiki().map(|w| w.name.clone()))
-        .ok_or_else(|| Error::NoWikiConfigured)?;
+        .ok_or(Error::NoWikiConfigured)?;
 
     let resolution = resolve::resolve(&wikis, &start_wiki, &page, &config.index)?;
 

@@ -17,7 +17,11 @@ use crate::args::{Args, WikiCommand};
 pub fn run(cmd: WikiCommand, args: Args, _config: Config, wikis: WikiSet) -> Result<()> {
     match cmd {
         WikiCommand::List => list(args, wikis),
-        WikiCommand::Add { name, path, default } => add(name, path, default),
+        WikiCommand::Add {
+            name,
+            path,
+            default,
+        } => add(name, path, default),
         WikiCommand::Remove { name } => remove(name),
         WikiCommand::Rename { old, new } => rename(old, new),
         WikiCommand::Mount { parent, child } => mount(parent, child),
@@ -38,7 +42,12 @@ fn list(_args: Args, wikis: WikiSet) -> Result<()> {
     for wiki in wikis.iter() {
         let is_default = wikis.default_wiki().is_some_and(|d| d.name == wiki.name);
         let marker = if is_default { "*" } else { " " };
-        println!("{} {}  {}", marker, wiki.name, sanitize_path_display(&wiki.root));
+        println!(
+            "{} {}  {}",
+            marker,
+            wiki.name,
+            sanitize_path_display(&wiki.root)
+        );
     }
     Ok(())
 }
@@ -65,7 +74,11 @@ fn add(name: String, path: String, make_default: bool) -> Result<()> {
         )));
     }
 
-    cfg.wikis.push(WikiEntry { name: name.clone(), path: abs.clone(), mounts: Vec::new() });
+    cfg.wikis.push(WikiEntry {
+        name: name.clone(),
+        path: abs.clone(),
+        mounts: Vec::new(),
+    });
 
     if make_default || cfg.default_wiki.is_none() {
         cfg.default_wiki = Some(name.clone());
@@ -204,8 +217,10 @@ fn read_config_raw() -> Result<Config> {
     if !path.exists() {
         return Ok(Config::default());
     }
-    let text = std::fs::read_to_string(&path)
-        .map_err(|e| Error::Config { message: e.to_string(), path: Some(path.clone()) })?;
+    let text = std::fs::read_to_string(&path).map_err(|e| Error::Config {
+        message: e.to_string(),
+        path: Some(path.clone()),
+    })?;
     let layer = terminalwiki_core::config::parse_global(&text, Some(path))?;
     let mut cfg = Config::default();
     layer.apply_to(&mut cfg);
@@ -217,8 +232,10 @@ fn write_config_raw(config: &Config) -> Result<()> {
     let path = config_file().ok_or_else(|| Error::config("Cannot determine config directory"))?;
 
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| Error::Config { message: e.to_string(), path: Some(path.clone()) })?;
+        std::fs::create_dir_all(parent).map_err(|e| Error::Config {
+            message: e.to_string(),
+            path: Some(path.clone()),
+        })?;
     }
 
     // Build a minimal TOML document from the config fields.
@@ -245,7 +262,10 @@ fn write_config_raw(config: &Config) -> Result<()> {
                 m.insert(
                     "mount".into(),
                     toml::Value::Array(
-                        w.mounts.iter().map(|s| toml::Value::String(s.clone())).collect(),
+                        w.mounts
+                            .iter()
+                            .map(|s| toml::Value::String(s.clone()))
+                            .collect(),
                     ),
                 );
             }
@@ -257,11 +277,15 @@ fn write_config_raw(config: &Config) -> Result<()> {
         doc.insert("wiki".into(), toml::Value::Array(wikis));
     }
 
-    let text = toml::to_string_pretty(&toml::Value::Table(doc))
-        .map_err(|e| Error::Config { message: e.to_string(), path: Some(path.clone()) })?;
+    let text = toml::to_string_pretty(&toml::Value::Table(doc)).map_err(|e| Error::Config {
+        message: e.to_string(),
+        path: Some(path.clone()),
+    })?;
 
-    std::fs::write(&path, text)
-        .map_err(|e| Error::Config { message: e.to_string(), path: Some(path) })?;
+    std::fs::write(&path, text).map_err(|e| Error::Config {
+        message: e.to_string(),
+        path: Some(path),
+    })?;
 
     Ok(())
 }

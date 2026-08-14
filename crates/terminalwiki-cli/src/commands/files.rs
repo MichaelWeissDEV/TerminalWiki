@@ -8,14 +8,17 @@ use terminalwiki_core::{Config, Error, Result};
 
 use crate::args::Args;
 
-pub fn files(_type_filter: Option<String>, args: Args, config: Config, wikis: WikiSet) -> Result<()> {
+pub fn files(
+    _type_filter: Option<String>,
+    args: Args,
+    config: Config,
+    wikis: WikiSet,
+) -> Result<()> {
     if wikis.is_empty() {
         return Err(Error::NoWikiConfigured);
     }
 
-    let type_filter: Option<ContentType> = _type_filter
-        .as_deref()
-        .and_then(ContentType::parse);
+    let type_filter: Option<ContentType> = _type_filter.as_deref().and_then(ContentType::parse);
 
     for wiki in wikis.iter() {
         let scanned = scan(wiki, &config.index);

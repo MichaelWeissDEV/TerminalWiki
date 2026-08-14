@@ -1,53 +1,44 @@
-# Current Development Status
+# TerminalWiki — Current Development & Architecture Status
 
-Date: 2026-08-14
-Rust: 1.82+ (2021 edition)
-Milestone: **Alpha Phase 1 (Consolidation & Robustness)**
+**Status:** Alpha 1.0 (Integration Recovery Completed)  
+**Date:** 2026-08-14 / 2026-08-15  
+**Repository:** [https://github.com/MichaelWeissDEV/TerminalWiki](https://github.com/MichaelWeissDEV/TerminalWiki)
 
-## Checks
+---
 
-- `cargo check --workspace --all-targets --all-features`: PASS (0 errors, 0 warnings)
-- `cargo build --workspace --release`: PASS
-- `cargo clippy`: Clean
-- Unit & Architecture Tests: Verified
+## Quality Gate Checklist
 
-## Completed In This Phase
+| Gate Step | Command | Status |
+|---|---|---|
+| **Formatting** | `cargo fmt --all -- --check` | **PASS (0 diffs)** |
+| **Workspace Check** | `cargo check --workspace --all-targets --all-features` | **PASS (0 errors)** |
+| **Clippy Validation** | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | **PASS (0 warnings)** |
+| **Release Build** | `cargo build --release --workspace` | **PASS (Clean binary)** |
 
-1. **Default Wiki & Home Resolution**:
-   - Centralized `WikiSet::default_wiki()` and `WikiSet::get()`.
-   - Strict fallback priority: `.terminalwiki.toml` (`home = "..."`) -> `index.md` -> `README.md` -> `Home.md` -> `home.md` -> automatic generated overview.
-2. **Content Classification**:
-   - Centralized `ContentType` classification (`classify_file(&Path)` / `classify(&Path, &[u8])`).
-   - Source code files bypass markdown parser and route directly to the code renderer.
-3. **Syntax Highlighting & Code Renderer**:
-   - Integrated `syntect` using base16 palettes.
-   - Complete preservation of indentation, whitespace, and column structure.
-   - Line numbers and range highlighting support.
-4. **Markdown AST & Semantic Links**:
-   - `pulldown-cmark` parsing into structured `Document` AST (`Block` & `Inline`).
-   - Tables with alignment and single-line rules `───`.
-   - Callouts (`[!NOTE]`, `[!TIP]`, `[!WARNING]`, `[!CAUTION]`, `[!IMPORTANT]`).
-   - Embedded link tracking for interactive TUI cycling (`Tab`/`Enter`).
-5. **Search Engine Upgrade**:
-   - Persistent `Tantivy` full-text search with schema versioning (`INDEX_SCHEMA_VERSION = 2`), BM25 ranking, and contextual snippet generation.
-   - In-memory `Nucleo` fuzzy finder for instant sub-millisecond page finding.
-   - Full structured query AST parsing (`tag:`, `wiki:`, `type:`, `ext:`, `path:`, `title:`, `-not`).
-6. **Machine-Readable Outputs**:
-   - Strict `serde_json` serialization for `--json` and `--jsonl`.
-   - Clean stdout (data) vs. stderr (diagnostics/progress) separation.
-7. **TUI Overhaul**:
-   - Clean, minimalist viewport layout without superfluous boxes.
-   - Integrated Nucleo fuzzy finder (`f` / `Ctrl+p`).
-   - Document outline section jumper (`o`).
-   - Backlinks pane (`b`) and safe `$EDITOR` suspension (`e`).
-8. **Benchmarks & Fixture Generator**:
-   - Implemented `tw-bench-gen` binary for generating synthetic 1k, 10k, 100k page wikis.
-   - Benchmark suite measuring Markdown parsing, syntect highlighting, and Nucleo fuzzy search.
-9. **Documentation**:
-   - Created `docs/architecture/` (`filesystem-model.md`, `indexing.md`, `rendering.md`, `security.md`).
-   - Created `README.md`.
+---
 
-## Next Phase Goals (Deferred)
-- Rich media / Kitty / Sixel image protocols
-- Full LaTeX pixel rendering
-- File watcher daemon / background auto-indexing
+## Architectural & Integration Achievements
+
+### 1. Semantic Markdown AST & Pulldown-Cmark Parser
+- Implemented recursive `Block` and `Inline` AST with strict element separation in [`terminalwiki-render::document`](file:///Users/michaelweiss/git/github/TerminalWiki/crates/terminalwiki-render/src/document.rs).
+- Added `RenderedHeading` (with level, line, text) and `RenderedLink` (with target classification `Wiki`, `External`, `File`, `Heading`).
+- Pulldown-cmark stack parser in [`markdown.rs`](file:///Users/michaelweiss/git/github/TerminalWiki/crates/terminalwiki-render/src/markdown.rs) seamlessly supports WikiLinks (`[[Target]]`, `[[Target|Alias]]`), headings, code blocks, tables, task lists, and callouts.
+
+### 2. Centralized Content Dispatch & Syntect Code Viewer
+- Added `render_path()` in [`terminalwiki-render`](file:///Users/michaelweiss/git/github/TerminalWiki/crates/terminalwiki-render/src/lib.rs) for single-entrypoint rendering across CLI and TUI.
+- Precision tabstop expansion with Unicode display column tracking in [`code_view.rs`](file:///Users/michaelweiss/git/github/TerminalWiki/crates/terminalwiki-render/src/code_view.rs).
+- Syntect highlight engine with lazy `SyntaxSet` and `ThemeSet` singletons without token or whitespace alteration.
+
+### 3. Tantivy Index Isolation & Read-Only Safety
+- Isolated Tantivy search index into `~/.cache/terminalwiki/index/<wiki>/tantivy/` and metadata into `~/.cache/terminalwiki/index/<wiki>/state.json`.
+- `TantivyStore::open_reader()` guarantees strictly read-only index access during `tw search`, preventing unintended index mutation or deletion.
+- Implemented 5x/10x title boosting and proper error handling for non-text filters in search queries.
+
+### 4. Interactive Terminal-Native TUI
+- Full conversion to use `RenderedHeading` and `RenderedLink`.
+- Keyboard navigation: `Tab` / `Shift-Tab` link cycling, `Enter` follow, `o` outline navigation, `b` backlinks viewer, `f` / `Ctrl+p` Nucleo-powered fuzzy finder.
+- Minimalist terminal-native layout adhering strictly to Unix design principles.
+
+### 5. Automated Testing Suite
+- Unit tests for all Markdown AST blocks and inlines.
+- Integration tests in [`tests/integration_tests.rs`](file:///Users/michaelweiss/git/github/TerminalWiki/tests/integration_tests.rs) verifying index lifecycle (rebuild, incremental update, file modification, deletion, renaming), read-only search invariants, home page priority resolution, code whitespace preservation, and Unicode width handling.

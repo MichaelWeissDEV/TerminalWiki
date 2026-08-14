@@ -11,7 +11,9 @@ use terminalwiki_render::LinkTarget;
 use crate::app::{App, Mode};
 
 pub fn handle_event(app: &mut App) -> Result<()> {
-    if !poll_event(Duration::from_millis(100)).map_err(|e| terminalwiki_core::Error::other(e.to_string()))? {
+    if !poll_event(Duration::from_millis(100))
+        .map_err(|e| terminalwiki_core::Error::other(e.to_string()))?
+    {
         return Ok(());
     }
 
@@ -103,10 +105,7 @@ fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 app.selected_link_idx = Some(next);
                 let link = &app.links[next];
                 app.scroll = link.line.saturating_sub(view_h / 2);
-                app.status_message = Some(format!(
-                    "Link: {} (press Enter to open)",
-                    link.label
-                ));
+                app.status_message = Some(format!("Link: {} (press Enter to open)", link.label));
             }
         }
         (KeyModifiers::SHIFT, KeyCode::BackTab) => {
@@ -118,10 +117,7 @@ fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 app.selected_link_idx = Some(prev);
                 let link = &app.links[prev];
                 app.scroll = link.line.saturating_sub(view_h / 2);
-                app.status_message = Some(format!(
-                    "Link: {} (press Enter to open)",
-                    link.label
-                ));
+                app.status_message = Some(format!("Link: {} (press Enter to open)", link.label));
             }
         }
         (KeyModifiers::NONE, KeyCode::Enter) => {

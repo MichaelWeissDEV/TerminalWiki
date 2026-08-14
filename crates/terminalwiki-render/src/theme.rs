@@ -2,11 +2,29 @@ use crate::ansi::{Color, Style};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SemanticColor {
-    Foreground, Muted, Heading, Link, Code, Selection, Warning, Error, Success, Accent, Keyword, String, Comment, Number, Function
+    Foreground,
+    Muted,
+    Heading,
+    Link,
+    Code,
+    Selection,
+    Warning,
+    Error,
+    Success,
+    Accent,
+    Keyword,
+    String,
+    Comment,
+    Number,
+    Function,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Theme { Dark, Light, Mono }
+pub enum Theme {
+    Dark,
+    Light,
+    Mono,
+}
 
 impl Theme {
     pub fn color(&self, semantic: SemanticColor) -> Color {

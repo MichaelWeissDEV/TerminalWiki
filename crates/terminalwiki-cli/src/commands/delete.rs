@@ -9,13 +9,7 @@ use terminalwiki_core::{Config, Error, Result};
 
 use crate::args::Args;
 
-pub fn delete(
-    page: String,
-    force: bool,
-    args: Args,
-    config: Config,
-    wikis: WikiSet,
-) -> Result<()> {
+pub fn delete(page: String, force: bool, args: Args, config: Config, wikis: WikiSet) -> Result<()> {
     if wikis.is_empty() {
         return Err(Error::NoWikiConfigured);
     }
@@ -23,7 +17,7 @@ pub fn delete(
     let start_wiki = args
         .wiki
         .or_else(|| wikis.default_wiki().map(|w| w.name.clone()))
-        .ok_or_else(|| Error::NoWikiConfigured)?;
+        .ok_or(Error::NoWikiConfigured)?;
 
     let resolution = resolve::resolve(&wikis, &start_wiki, &page, &config.index)?;
 

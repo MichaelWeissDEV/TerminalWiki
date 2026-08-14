@@ -7,14 +7,22 @@ use terminalwiki_core::resolve;
 use terminalwiki_core::sanitize::sanitize_line;
 use terminalwiki_core::wiki::WikiSet;
 use terminalwiki_core::{Config, Error, Result};
-use terminalwiki_render::{detect_color_mode, render_markdown, render_path, write_document, ColorMode, Theme};
+use terminalwiki_render::{
+    detect_color_mode, render_markdown, render_path, write_document, ColorMode, Theme,
+};
 
 use crate::args::Args;
 use crate::output;
 
 pub fn show_home(args: Args, config: Config, wikis: WikiSet) -> Result<()> {
     let default_wiki = wikis.default_wiki().ok_or(Error::NoWikiConfigured)?;
-    show_page(Some(default_wiki.name.clone()), String::new(), args, config, wikis)
+    show_page(
+        Some(default_wiki.name.clone()),
+        String::new(),
+        args,
+        config,
+        wikis,
+    )
 }
 
 pub fn show_page(
@@ -46,14 +54,12 @@ pub fn show_page(
     display_file(&resolution.path, args.plain, args.no_color, &config)
 }
 
-fn display_file(
-    path: &Path,
-    plain: bool,
-    no_color: bool,
-    config: &Config,
-) -> Result<()> {
+fn display_file(path: &Path, plain: bool, no_color: bool, config: &Config) -> Result<()> {
     if !path.exists() {
-        return Err(Error::other(format!("File does not exist: {}", path.display())));
+        return Err(Error::other(format!(
+            "File does not exist: {}",
+            path.display()
+        )));
     }
 
     let bytes = fs::read(path).map_err(|e| Error::io(path, e))?;
@@ -83,7 +89,10 @@ fn render_wiki_overview(
     plain: bool,
     no_color: bool,
 ) -> Result<()> {
-    let mut overview = format!("# {}\n\n*Knowledge base overview*\n\n## Pages\n\n", wiki.name);
+    let mut overview = format!(
+        "# {}\n\n*Knowledge base overview*\n\n## Pages\n\n",
+        wiki.name
+    );
     let files = terminalwiki_core::scan::scan(wiki, &config.index);
     for file in files {
         if file.content_type.is_page() {

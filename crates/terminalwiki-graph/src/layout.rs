@@ -7,10 +7,7 @@ pub struct LayoutEngine;
 impl LayoutEngine {
     /// Compute a force-directed or hierarchical layout
     /// Returns node positions (x, y) indexed by the subgraph node indices
-    pub fn compute_layout(
-        graph: &WikiGraph,
-        sub: &SubGraph,
-    ) -> HashMap<usize, (f64, f64)> {
+    pub fn compute_layout(graph: &WikiGraph, sub: &SubGraph) -> HashMap<usize, (f64, f64)> {
         let n = sub.nodes.len();
         if n == 0 {
             return HashMap::new();
@@ -44,12 +41,15 @@ impl LayoutEngine {
         let node_set: std::collections::HashSet<_> = sub.nodes.iter().copied().collect();
 
         for _ in 0..iter_count {
-            let mut forces: HashMap<usize, (f64, f64)> = sub.nodes.iter().map(|&id| (id, (0.0, 0.0))).collect();
+            let mut forces: HashMap<usize, (f64, f64)> =
+                sub.nodes.iter().map(|&id| (id, (0.0, 0.0))).collect();
 
             // Repulsion
             for &u in &sub.nodes {
                 for &v in &sub.nodes {
-                    if u == v { continue; }
+                    if u == v {
+                        continue;
+                    }
                     let pu = pos[&u];
                     let pv = pos[&v];
                     let dx = pu.0 - pv.0;
@@ -79,10 +79,10 @@ impl LayoutEngine {
                             let f = dist * dist / k;
                             let fx = f * dx / dist;
                             let fy = f * dy / dist;
-                            
+
                             let cur_u = forces[&edge.from];
                             forces.insert(edge.from, (cur_u.0 + fx, cur_u.1 + fy));
-                            
+
                             let cur_v = forces[&to];
                             forces.insert(to, (cur_v.0 - fx, cur_v.1 - fy));
                         }
@@ -97,7 +97,11 @@ impl LayoutEngine {
                 // simple cap on force
                 let f_mag = (f.0 * f.0 + f.1 * f.1).sqrt();
                 let max_disp = 5.0;
-                let scale = if f_mag > max_disp { max_disp / f_mag } else { 1.0 };
+                let scale = if f_mag > max_disp {
+                    max_disp / f_mag
+                } else {
+                    1.0
+                };
                 pos.insert(u, (p.0 + f.0 * scale * dt, p.1 + f.1 * scale * dt));
             }
         }
@@ -107,7 +111,7 @@ impl LayoutEngine {
     fn bfs_ring_layout(graph: &WikiGraph, sub: &SubGraph) -> HashMap<usize, (f64, f64)> {
         let mut pos = HashMap::new();
         let center = sub.center;
-        
+
         let mut queue = VecDeque::new();
         let mut depths = HashMap::new();
         queue.push_back(center);
@@ -120,7 +124,7 @@ impl LayoutEngine {
         while let Some(u) = queue.pop_front() {
             let d = depths[&u];
             // simplified: we just get depth of each node relative to center
-            
+
             // neighbors
             // outgoing
             for &e_idx in &graph.outgoing[u] {
@@ -173,13 +177,21 @@ impl LayoutEngine {
 pub fn export_dot(graph: &WikiGraph) -> String {
     let mut out = String::from("digraph G {\n");
     for node in &graph.nodes {
-        out.push_str(&format!("  \"{}\" [label=\"{}\"];\n", node.id.relative.display(), node.title));
+        out.push_str(&format!(
+            "  \"{}\" [label=\"{}\"];\n",
+            node.id.relative.display(),
+            node.title
+        ));
     }
     for edge in &graph.edges {
         if let Some(to) = edge.to {
             let from_node = &graph.nodes[edge.from];
             let to_node = &graph.nodes[to];
-            out.push_str(&format!("  \"{}\" -> \"{}\";\n", from_node.id.relative.display(), to_node.id.relative.display()));
+            out.push_str(&format!(
+                "  \"{}\" -> \"{}\";\n",
+                from_node.id.relative.display(),
+                to_node.id.relative.display()
+            ));
         }
     }
     out.push_str("}\n");
@@ -192,7 +204,11 @@ pub fn export_dot_subgraph(graph: &WikiGraph, sub: &SubGraph) -> String {
 
     for &n_idx in &sub.nodes {
         let node = &graph.nodes[n_idx];
-        out.push_str(&format!("  \"{}\" [label=\"{}\"];\n", node.id.relative.display(), node.title));
+        out.push_str(&format!(
+            "  \"{}\" [label=\"{}\"];\n",
+            node.id.relative.display(),
+            node.title
+        ));
     }
     for &e_idx in &sub.edges {
         let edge = &graph.edges[e_idx];
@@ -200,7 +216,11 @@ pub fn export_dot_subgraph(graph: &WikiGraph, sub: &SubGraph) -> String {
             if node_set.contains(&edge.from) && node_set.contains(&to) {
                 let from_node = &graph.nodes[edge.from];
                 let to_node = &graph.nodes[to];
-                out.push_str(&format!("  \"{}\" -> \"{}\";\n", from_node.id.relative.display(), to_node.id.relative.display()));
+                out.push_str(&format!(
+                    "  \"{}\" -> \"{}\";\n",
+                    from_node.id.relative.display(),
+                    to_node.id.relative.display()
+                ));
             }
         }
     }

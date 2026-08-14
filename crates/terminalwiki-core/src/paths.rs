@@ -182,7 +182,10 @@ mod tests {
     fn tilde_expansion_only_applies_at_the_start() {
         let home = PathBuf::from("/home/tester");
         std::env::set_var("HOME", &home);
-        assert_eq!(expand_tilde(Path::new("~/Knowledge")), home.join("Knowledge"));
+        assert_eq!(
+            expand_tilde(Path::new("~/Knowledge")),
+            home.join("Knowledge")
+        );
         assert_eq!(expand_tilde(Path::new("~")), home);
         // A tilde in the middle is a legitimate file name character.
         assert_eq!(expand_tilde(Path::new("/a/~/b")), PathBuf::from("/a/~/b"));

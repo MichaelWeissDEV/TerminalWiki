@@ -30,7 +30,10 @@ pub struct LineRange {
 
 impl LineRange {
     pub fn single(line: u32) -> Self {
-        LineRange { start: line, end: line }
+        LineRange {
+            start: line,
+            end: line,
+        }
     }
 
     pub fn contains(&self, line: u32) -> bool {
@@ -42,9 +45,17 @@ impl LineRange {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LinkTarget {
     /// A wiki page, optionally in another wiki, optionally at a heading.
-    Page { wiki: Option<String>, name: String, anchor: Option<String> },
+    Page {
+        wiki: Option<String>,
+        name: String,
+        anchor: Option<String>,
+    },
     /// A file addressed explicitly, optionally at a line or range.
-    File { wiki: Option<String>, path: String, lines: Option<LineRange> },
+    File {
+        wiki: Option<String>,
+        path: String,
+        lines: Option<LineRange>,
+    },
     /// A symbol. Parsed and linted now; resolved once tree-sitter lands (spec §29).
     Symbol { name: String },
 }
@@ -116,7 +127,11 @@ impl WikiLink {
             }
             let (wiki, path) = split_wiki_prefix(path);
             return Some(WikiLink {
-                target: LinkTarget::File { wiki, path: path.to_string(), lines },
+                target: LinkTarget::File {
+                    wiki,
+                    path: path.to_string(),
+                    lines,
+                },
                 label,
                 raw,
             });
@@ -129,7 +144,9 @@ impl WikiLink {
                 return None;
             }
             return Some(WikiLink {
-                target: LinkTarget::Symbol { name: name.to_string() },
+                target: LinkTarget::Symbol {
+                    name: name.to_string(),
+                },
                 label,
                 raw,
             });
@@ -150,7 +167,11 @@ impl WikiLink {
         }
 
         Some(WikiLink {
-            target: LinkTarget::Page { wiki, name: name.to_string(), anchor },
+            target: LinkTarget::Page {
+                wiki,
+                name: name.to_string(),
+                anchor,
+            },
             label,
             raw,
         })
@@ -165,7 +186,10 @@ impl WikiLink {
 /// text, such as `[[Größe]]`. Once the ASCII bytes are known to match, the
 /// split point is guaranteed to be a char boundary.
 fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
-    debug_assert!(prefix.is_ascii(), "prefix must be ASCII for byte comparison");
+    debug_assert!(
+        prefix.is_ascii(),
+        "prefix must be ASCII for byte comparison"
+    );
     let head = s.as_bytes().get(..prefix.len())?;
     if head.eq_ignore_ascii_case(prefix.as_bytes()) {
         Some(&s[prefix.len()..])
@@ -194,7 +218,9 @@ fn split_wiki_prefix(s: &str) -> (Option<String>, &str) {
 
 /// Splits a trailing `#L30` or `#L30-L55` line reference (spec §28).
 fn split_line_reference(s: &str) -> (&str, Option<LineRange>) {
-    let Some(hash) = s.rfind('#') else { return (s, None) };
+    let Some(hash) = s.rfind('#') else {
+        return (s, None);
+    };
     let (path, frag) = s.split_at(hash);
     let frag = &frag[1..];
 
@@ -221,7 +247,10 @@ fn parse_line_fragment(frag: &str) -> Option<LineRange> {
         Some((a, b)) => {
             let (start, end) = (strip(a)?, strip(b)?);
             // A reversed range is a typo, not a reason to fail: normalise it.
-            Some(LineRange { start: start.min(end), end: start.max(end) })
+            Some(LineRange {
+                start: start.min(end),
+                end: start.max(end),
+            })
         }
         None => strip(frag).map(LineRange::single),
     }
@@ -309,7 +338,11 @@ mod tests {
         let l = page("Heap Exploitation");
         assert_eq!(
             l.target,
-            LinkTarget::Page { wiki: None, name: "Heap Exploitation".into(), anchor: None }
+            LinkTarget::Page {
+                wiki: None,
+                name: "Heap Exploitation".into(),
+                anchor: None
+            }
         );
         assert_eq!(l.display_text(), "Heap Exploitation");
     }
@@ -319,7 +352,11 @@ mod tests {
         let l = page("Security/Heap");
         assert_eq!(
             l.target,
-            LinkTarget::Page { wiki: None, name: "Security/Heap".into(), anchor: None }
+            LinkTarget::Page {
+                wiki: None,
+                name: "Security/Heap".into(),
+                anchor: None
+            }
         );
     }
 
@@ -339,7 +376,11 @@ mod tests {
         let l = page("rust::Ownership");
         assert_eq!(
             l.target,
-            LinkTarget::Page { wiki: Some("rust".into()), name: "Ownership".into(), anchor: None }
+            LinkTarget::Page {
+                wiki: Some("rust".into()),
+                name: "Ownership".into(),
+                anchor: None
+            }
         );
         assert_eq!(l.wiki(), Some("rust"));
 
@@ -367,7 +408,11 @@ mod tests {
         let l = page("file:src/main.rs");
         assert_eq!(
             l.target,
-            LinkTarget::File { wiki: None, path: "src/main.rs".into(), lines: None }
+            LinkTarget::File {
+                wiki: None,
+                path: "src/main.rs".into(),
+                lines: None
+            }
         );
 
         let l = page("file:src/main.rs#L30");
@@ -397,7 +442,9 @@ mod tests {
     fn accepts_line_references_without_the_l_prefix() {
         let l = page("file:a.rs#30-55");
         match l.target {
-            LinkTarget::File { lines: Some(r), .. } => assert_eq!(r, LineRange { start: 30, end: 55 }),
+            LinkTarget::File { lines: Some(r), .. } => {
+                assert_eq!(r, LineRange { start: 30, end: 55 })
+            }
             other => panic!("{other:?}"),
         }
     }
@@ -406,7 +453,9 @@ mod tests {
     fn a_reversed_line_range_is_normalised() {
         let l = page("file:a.rs#L55-L30");
         match l.target {
-            LinkTarget::File { lines: Some(r), .. } => assert_eq!(r, LineRange { start: 30, end: 55 }),
+            LinkTarget::File { lines: Some(r), .. } => {
+                assert_eq!(r, LineRange { start: 30, end: 55 })
+            }
             other => panic!("{other:?}"),
         }
     }
@@ -429,7 +478,9 @@ mod tests {
         let l = page("symbol:terminalwiki::index::Indexer");
         assert_eq!(
             l.target,
-            LinkTarget::Symbol { name: "terminalwiki::index::Indexer".into() }
+            LinkTarget::Symbol {
+                name: "terminalwiki::index::Indexer".into()
+            }
         );
     }
 
@@ -438,7 +489,11 @@ mod tests {
         let l = page("file:rust::src/lib.rs");
         assert_eq!(
             l.target,
-            LinkTarget::File { wiki: Some("rust".into()), path: "src/lib.rs".into(), lines: None }
+            LinkTarget::File {
+                wiki: Some("rust".into()),
+                path: "src/lib.rs".into(),
+                lines: None
+            }
         );
     }
 

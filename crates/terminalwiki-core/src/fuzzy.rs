@@ -31,7 +31,10 @@ pub struct Match {
 
 /// Characters that mark a word boundary for scoring purposes.
 fn is_separator(c: char) -> bool {
-    matches!(c, '/' | '\\' | '_' | '-' | '.' | ' ' | ':' | ',' | '(' | ')' | '[' | ']' | '#')
+    matches!(
+        c,
+        '/' | '\\' | '_' | '-' | '.' | ' ' | ':' | ',' | '(' | ')' | '[' | ']' | '#'
+    )
 }
 
 /// Scores `needle` against `haystack`, case-insensitively.
@@ -46,7 +49,10 @@ fn is_separator(c: char) -> bool {
 /// good boundary bonuses ranks well enough while staying O(n).
 pub fn score(needle: &str, haystack: &str) -> Option<Match> {
     if needle.is_empty() {
-        return Some(Match { score: 0, positions: Vec::new() });
+        return Some(Match {
+            score: 0,
+            positions: Vec::new(),
+        });
     }
 
     let hay: Vec<char> = haystack.chars().collect();
@@ -68,7 +74,11 @@ pub fn score(needle: &str, haystack: &str) -> Option<Match> {
                 break;
             }
             // Skipping a character opens or extends a gap.
-            total += if in_gap { PENALTY_GAP_EXTEND } else { PENALTY_GAP_START };
+            total += if in_gap {
+                PENALTY_GAP_EXTEND
+            } else {
+                PENALTY_GAP_START
+            };
             in_gap = true;
             hay_idx += 1;
         }
@@ -105,7 +115,10 @@ pub fn score(needle: &str, haystack: &str) -> Option<Match> {
     // tighter one first.
     total -= (hay.len() as Score) / 16;
 
-    Some(Match { score: total, positions })
+    Some(Match {
+        score: total,
+        positions,
+    })
 }
 
 /// Scores a needle against several fields, keeping the best result.
@@ -206,7 +219,9 @@ where
         .collect();
 
     scored.sort_by(|a, b| {
-        b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal).then_with(|| a.1.cmp(b.1))
+        b.0.partial_cmp(&a.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.1.cmp(b.1))
     });
     scored.dedup_by(|a, b| a.1.eq_ignore_ascii_case(b.1));
     scored.into_iter().take(limit).map(|(_, c)| c).collect()
@@ -243,7 +258,10 @@ mod tests {
         // `he` at the start of a word beats `he` buried inside one.
         let boundary = score("he", "the heap").unwrap();
         let interior = score("he", "another").unwrap();
-        assert!(boundary.score > interior.score, "{boundary:?} vs {interior:?}");
+        assert!(
+            boundary.score > interior.score,
+            "{boundary:?} vs {interior:?}"
+        );
     }
 
     #[test]
@@ -324,7 +342,13 @@ mod tests {
     #[test]
     fn did_you_mean_finds_the_spec_example() {
         // `tw heep` must suggest Heap and friends (spec §73).
-        let candidates = ["Heap", "Heap Exploitation", "Heap Allocator", "Compiler", "Analysis"];
+        let candidates = [
+            "Heap",
+            "Heap Exploitation",
+            "Heap Allocator",
+            "Compiler",
+            "Analysis",
+        ];
         let got = suggestions("heep", candidates, 3);
         assert!(got.contains(&"Heap"), "{got:?}");
         assert_eq!(got[0], "Heap", "closest match must rank first: {got:?}");
@@ -357,6 +381,9 @@ mod tests {
         for _ in 0..20_000 {
             let _ = score("shexp", hay);
         }
-        assert!(start.elapsed().as_millis() < 2000, "fuzzy scoring far too slow");
+        assert!(
+            start.elapsed().as_millis() < 2000,
+            "fuzzy scoring far too slow"
+        );
     }
 }

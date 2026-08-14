@@ -32,6 +32,8 @@ terminalwiki-cli = { path = "crates/terminalwiki-cli", version = "0.1.0" }
 terminalwiki-core = { path = "crates/terminalwiki-core" }
 terminalwiki-render = { path = "crates/terminalwiki-render" }
 terminalwiki-index = { path = "crates/terminalwiki-index" }
+terminalwiki-graph = { path = "crates/terminalwiki-graph" }
+tempfile = "3"
 
 [features]
 default = []

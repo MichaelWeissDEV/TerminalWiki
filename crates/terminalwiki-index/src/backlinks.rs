@@ -1,5 +1,5 @@
-use std::path::{Path, PathBuf};
 use crate::entry::IndexEntry;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
 pub struct BacklinkResult {
@@ -10,7 +10,10 @@ pub struct BacklinkResult {
 pub fn find_backlinks(entries: &[IndexEntry], target_relative: &Path) -> Vec<BacklinkResult> {
     let mut results = Vec::new();
     let target_str = target_relative.to_string_lossy();
-    let target_stem = target_relative.file_stem().unwrap_or_default().to_string_lossy();
+    let target_stem = target_relative
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy();
 
     for entry in entries {
         for link in &entry.wiki_links {

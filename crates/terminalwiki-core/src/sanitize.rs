@@ -297,7 +297,10 @@ mod tests {
                 if out == '\n' {
                     continue; // explicitly allowed in text mode
                 }
-                assert!(!is_forbidden(out), "cp {cp:#x} produced forbidden char {out:?}");
+                assert!(
+                    !is_forbidden(out),
+                    "cp {cp:#x} produced forbidden char {out:?}"
+                );
             }
         }
     }

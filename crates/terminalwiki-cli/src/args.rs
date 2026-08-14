@@ -18,41 +18,99 @@ pub struct Args {
 pub enum Command {
     #[default]
     Home,
-    Page { wiki: Option<String>, page: String },
-    Tui { wiki: Option<String>, page: Option<String> },
-    Search { query: String },
-    Find { query: String },
-    Raw { page: String },
-    Render { file: String },
-    New { page: String },
-    Edit { page: String },
-    Delete { page: String, force: bool },
-    Backlinks { page: String },
-    Links { page: String },
-    Related { page: String },
-    Graph { page: Option<String>, depth: Option<usize>, format: Option<String> },
-    Tags { wiki: Option<String> },
-    Tag { tag: String },
-    Files { type_filter: Option<String> },
-    Query { query: String },
+    Page {
+        wiki: Option<String>,
+        page: String,
+    },
+    Tui {
+        wiki: Option<String>,
+        page: Option<String>,
+    },
+    Search {
+        query: String,
+    },
+    Find {
+        query: String,
+    },
+    Raw {
+        page: String,
+    },
+    Render {
+        file: String,
+    },
+    New {
+        page: String,
+    },
+    Edit {
+        page: String,
+    },
+    Delete {
+        page: String,
+        force: bool,
+    },
+    Backlinks {
+        page: String,
+    },
+    Links {
+        page: String,
+    },
+    Related {
+        page: String,
+    },
+    Graph {
+        page: Option<String>,
+        depth: Option<usize>,
+        format: Option<String>,
+    },
+    Tags {
+        wiki: Option<String>,
+    },
+    Tag {
+        tag: String,
+    },
+    Files {
+        type_filter: Option<String>,
+    },
+    Query {
+        query: String,
+    },
     Wiki(WikiCommand),
     Index(IndexCommand),
     Lint,
     Doctor,
     Stats,
     Config,
-    Completions { shell: String },
+    Completions {
+        shell: String,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum WikiCommand {
     List,
-    Add { name: String, path: String, default: bool },
-    Remove { name: String },
-    Rename { old: String, new: String },
-    Mount { parent: String, child: String },
-    Unmount { parent: String, child: String },
-    Default { name: String },
+    Add {
+        name: String,
+        path: String,
+        default: bool,
+    },
+    Remove {
+        name: String,
+    },
+    Rename {
+        old: String,
+        new: String,
+    },
+    Mount {
+        parent: String,
+        child: String,
+    },
+    Unmount {
+        parent: String,
+        child: String,
+    },
+    Default {
+        name: String,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -159,7 +217,10 @@ impl Args {
                 if positional.len() < 2 {
                     return Err("Missing PAGE argument for 'page' command".to_string());
                 }
-                parsed.command = Command::Page { wiki: parsed.wiki.clone(), page: positional[1].clone() };
+                parsed.command = Command::Page {
+                    wiki: parsed.wiki.clone(),
+                    page: positional[1].clone(),
+                };
             }
             "tui" => {
                 let mut wiki = None;
@@ -176,62 +237,83 @@ impl Args {
                 if positional.len() < 2 {
                     return Err("Missing QUERY argument for 'search' command".to_string());
                 }
-                parsed.command = Command::Search { query: positional[1].clone() };
+                parsed.command = Command::Search {
+                    query: positional[1].clone(),
+                };
             }
             "find" => {
                 if positional.len() < 2 {
                     return Err("Missing QUERY argument for 'find' command".to_string());
                 }
-                parsed.command = Command::Find { query: positional[1].clone() };
+                parsed.command = Command::Find {
+                    query: positional[1].clone(),
+                };
             }
             "raw" => {
                 if positional.len() < 2 {
                     return Err("Missing PAGE argument for 'raw' command".to_string());
                 }
-                parsed.command = Command::Raw { page: positional[1].clone() };
+                parsed.command = Command::Raw {
+                    page: positional[1].clone(),
+                };
             }
             "render" => {
                 if positional.len() < 2 {
                     return Err("Missing FILE argument for 'render' command".to_string());
                 }
-                parsed.command = Command::Render { file: positional[1].clone() };
+                parsed.command = Command::Render {
+                    file: positional[1].clone(),
+                };
             }
             "new" => {
                 if positional.len() < 2 {
                     return Err("Missing PAGE argument for 'new' command".to_string());
                 }
-                parsed.command = Command::New { page: positional[1].clone() };
+                parsed.command = Command::New {
+                    page: positional[1].clone(),
+                };
             }
             "edit" => {
                 if positional.len() < 2 {
                     return Err("Missing PAGE argument for 'edit' command".to_string());
                 }
-                parsed.command = Command::Edit { page: positional[1].clone() };
+                parsed.command = Command::Edit {
+                    page: positional[1].clone(),
+                };
             }
             "delete" => {
                 if positional.len() < 2 {
                     return Err("Missing PAGE argument for 'delete' command".to_string());
                 }
                 let force = positional.contains(&"--force".to_string());
-                parsed.command = Command::Delete { page: positional[1].clone(), force };
+                parsed.command = Command::Delete {
+                    page: positional[1].clone(),
+                    force,
+                };
             }
             "backlinks" => {
                 if positional.len() < 2 {
                     return Err("Missing PAGE argument for 'backlinks' command".to_string());
                 }
-                parsed.command = Command::Backlinks { page: positional[1].clone() };
+                parsed.command = Command::Backlinks {
+                    page: positional[1].clone(),
+                };
             }
             "links" => {
                 if positional.len() < 2 {
                     return Err("Missing PAGE argument for 'links' command".to_string());
                 }
-                parsed.command = Command::Links { page: positional[1].clone() };
+                parsed.command = Command::Links {
+                    page: positional[1].clone(),
+                };
             }
             "related" => {
                 if positional.len() < 2 {
                     return Err("Missing PAGE argument for 'related' command".to_string());
                 }
-                parsed.command = Command::Related { page: positional[1].clone() };
+                parsed.command = Command::Related {
+                    page: positional[1].clone(),
+                };
             }
             "graph" => {
                 let mut page = None;
@@ -241,13 +323,13 @@ impl Args {
                 while j < positional.len() {
                     let arg = &positional[j];
                     if arg == "--depth" && j + 1 < positional.len() {
-                        depth = positional[j+1].parse().ok();
+                        depth = positional[j + 1].parse().ok();
                         j += 2;
                     } else if let Some(val) = arg.strip_prefix("--depth=") {
                         depth = val.parse().ok();
                         j += 1;
                     } else if arg == "--format" && j + 1 < positional.len() {
-                        format = Some(positional[j+1].clone());
+                        format = Some(positional[j + 1].clone());
                         j += 2;
                     } else if let Some(val) = arg.strip_prefix("--format=") {
                         format = Some(val.to_string());
@@ -259,17 +341,27 @@ impl Args {
                         j += 1;
                     }
                 }
-                parsed.command = Command::Graph { page, depth, format };
+                parsed.command = Command::Graph {
+                    page,
+                    depth,
+                    format,
+                };
             }
             "tags" => {
-                let wiki = if positional.len() > 1 { Some(positional[1].clone()) } else { None };
+                let wiki = if positional.len() > 1 {
+                    Some(positional[1].clone())
+                } else {
+                    None
+                };
                 parsed.command = Command::Tags { wiki };
             }
             "tag" => {
                 if positional.len() < 2 {
                     return Err("Missing TAG argument for 'tag' command".to_string());
                 }
-                parsed.command = Command::Tag { tag: positional[1].clone() };
+                parsed.command = Command::Tag {
+                    tag: positional[1].clone(),
+                };
             }
             "files" => {
                 let mut type_filter = None;
@@ -277,7 +369,7 @@ impl Args {
                 while j < positional.len() {
                     let arg = &positional[j];
                     if arg == "--type" && j + 1 < positional.len() {
-                        type_filter = Some(positional[j+1].clone());
+                        type_filter = Some(positional[j + 1].clone());
                         j += 2;
                     } else if let Some(val) = arg.strip_prefix("--type=") {
                         type_filter = Some(val.to_string());
@@ -292,7 +384,9 @@ impl Args {
                 if positional.len() < 2 {
                     return Err("Missing QUERY argument for 'query' command".to_string());
                 }
-                parsed.command = Command::Query { query: positional[1].clone() };
+                parsed.command = Command::Query {
+                    query: positional[1].clone(),
+                };
             }
             "wiki" => {
                 if positional.len() < 2 {
@@ -315,7 +409,9 @@ impl Args {
                         if positional.len() < 3 {
                             return Err("Usage: tw wiki remove NAME".to_string());
                         }
-                        parsed.command = Command::Wiki(WikiCommand::Remove { name: positional[2].clone() });
+                        parsed.command = Command::Wiki(WikiCommand::Remove {
+                            name: positional[2].clone(),
+                        });
                     }
                     "rename" => {
                         if positional.len() < 4 {
@@ -348,7 +444,9 @@ impl Args {
                         if positional.len() < 3 {
                             return Err("Usage: tw wiki default NAME".to_string());
                         }
-                        parsed.command = Command::Wiki(WikiCommand::Default { name: positional[2].clone() });
+                        parsed.command = Command::Wiki(WikiCommand::Default {
+                            name: positional[2].clone(),
+                        });
                     }
                     _ => return Err(format!("Unknown wiki subcommand: {}", positional[1])),
                 }
@@ -372,7 +470,9 @@ impl Args {
                 if positional.len() < 2 {
                     return Err("Missing SHELL argument for 'completions'".to_string());
                 }
-                parsed.command = Command::Completions { shell: positional[1].clone() };
+                parsed.command = Command::Completions {
+                    shell: positional[1].clone(),
+                };
             }
             _ => {
                 if let Some(wiki_name) = cmd.strip_prefix('@') {
@@ -388,10 +488,16 @@ impl Args {
                     };
                 } else if positional.len() == 1 {
                     // PAGE or WIKI (handled by resolution)
-                    parsed.command = Command::Page { wiki: parsed.wiki.clone(), page: cmd.to_string() };
+                    parsed.command = Command::Page {
+                        wiki: parsed.wiki.clone(),
+                        page: cmd.to_string(),
+                    };
                 } else if positional.len() == 2 {
                     // WIKI PAGE
-                    parsed.command = Command::Page { wiki: Some(cmd.to_string()), page: positional[1].clone() };
+                    parsed.command = Command::Page {
+                        wiki: Some(cmd.to_string()),
+                        page: positional[1].clone(),
+                    };
                 } else {
                     return Err(format!("Unknown command: {}", cmd));
                 }

@@ -37,7 +37,8 @@ fn allocate_chunk(size: usize) -> *mut u8 {
     let iters = 5_000;
     let t0 = Instant::now();
     for _ in 0..iters {
-        let _doc = terminalwiki_render::render_markdown(sample_markdown, &config, &theme, color_mode);
+        let _doc =
+            terminalwiki_render::render_markdown(sample_markdown, &config, &theme, color_mode);
     }
     let elapsed = t0.elapsed();
     println!(
@@ -66,7 +67,8 @@ impl<N, E> Graph<N, E> {
 
     let t1 = Instant::now();
     for _ in 0..iters {
-        let _highlighted = terminalwiki_render::highlight::highlight(sample_code, Some("rs"), &theme);
+        let _highlighted =
+            terminalwiki_render::highlight::highlight(sample_code, Some("rs"), &theme);
     }
     let elapsed1 = t1.elapsed();
     println!(

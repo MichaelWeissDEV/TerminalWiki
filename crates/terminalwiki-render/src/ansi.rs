@@ -145,9 +145,7 @@ impl Style {
                 Color::BrightMagenta => prefix.push_str("\x1b[95m"),
                 Color::BrightCyan => prefix.push_str("\x1b[96m"),
                 Color::BrightWhite => prefix.push_str("\x1b[97m"),
-                Color::Rgb(r, g, b) => {
-                    prefix.push_str(&format!("\x1b[38;2;{};{};{}m", r, g, b))
-                }
+                Color::Rgb(r, g, b) => prefix.push_str(&format!("\x1b[38;2;{};{};{}m", r, g, b)),
                 Color::Index(i) => prefix.push_str(&format!("\x1b[38;5;{}m", i)),
             }
         }
