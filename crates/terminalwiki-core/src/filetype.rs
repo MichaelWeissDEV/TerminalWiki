@@ -376,7 +376,7 @@ mod tests {
         // Build content longer than SNIFF_LEN whose boundary splits a char.
         let mut data = vec![b'a'; SNIFF_LEN - 1];
         data.extend_from_slice("漢".as_bytes()); // 3 bytes, split at the window
-        data.extend(std::iter::repeat(b'b').take(100));
+        data.extend(std::iter::repeat_n(b'b', 100));
         assert!(!looks_binary(&data), "truncated multi-byte char misread as binary");
     }
 

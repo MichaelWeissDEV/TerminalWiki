@@ -1,13 +1,13 @@
-//! Screen rendering and minimalist layout for TUI (spec §50-§55).
+//! Screen rendering and minimalist terminal-native layout for TUI (spec §45-§55).
 
 use std::io::{stdout, Write};
 
 use crossterm::cursor::MoveTo;
 use crossterm::execute;
-use crossterm::style::{Color as CColor, Print, ResetColor, SetBackgroundColor, SetForegroundColor};
+use crossterm::style::{Color as CColor, Print, ResetColor, SetAttribute, SetForegroundColor, Attribute};
 use crossterm::terminal::{size as terminal_size, Clear, ClearType};
 use terminalwiki_core::sanitize::sanitize_line;
-use terminalwiki_core::unicode::{display_width, pad_display_width};
+use terminalwiki_core::unicode::{display_width, pad_display_width, truncate_display_width};
 
 use crate::app::{App, Mode};
 
@@ -23,11 +23,12 @@ pub fn draw(app: &App) -> std::io::Result<()> {
     let mut out = stdout();
     execute!(out, Clear(ClearType::All), MoveTo(0, 0))?;
 
-    // ─── 1. Minimal Header ────────────────────────────────────────────────────────
-    let title_display = if app.current_title.is_empty() {
-        "TerminalWiki".to_string()
+    // ─── 1. Minimal Header (Phase 46) ─────────────────────────────────────────────
+    let path_str = app.current_path.to_string_lossy();
+    let title_display = if path_str.is_empty() {
+        format!("{} · Home", app.current_wiki)
     } else {
-        format!("{}  ·  {}", app.current_title, app.current_wiki)
+        format!("{} / {}", app.current_wiki, path_str)
     };
 
     let percent_str = if !app.lines.is_empty() {
@@ -46,7 +47,9 @@ pub fn draw(app: &App) -> std::io::Result<()> {
     execute!(
         out,
         SetForegroundColor(CColor::White),
+        SetAttribute(Attribute::Bold),
         Print(format!("  {title_display}")),
+        SetAttribute(Attribute::Reset),
         Print(" ".repeat(pad_len)),
         SetForegroundColor(CColor::DarkGrey),
         Print(format!("{percent_str}  ")),
@@ -78,7 +81,7 @@ pub fn draw(app: &App) -> std::io::Result<()> {
                 let text_w = display_width(&span_text);
                 if current_col + text_w > width {
                     let available = width.saturating_sub(current_col);
-                    let truncated: String = span_text.chars().take(available).collect();
+                    let truncated = truncate_display_width(&span_text, available);
                     execute!(out, Print(&span.style.apply(&truncated)))?;
                     current_col += available;
                 } else {
@@ -99,30 +102,33 @@ pub fn draw(app: &App) -> std::io::Result<()> {
         Mode::Normal => {}
     }
 
-    // ─── 4. Footer Status Line (Clean, space-efficient) ──────────────────────────
+    // ─── 4. Footer Status Line (Phase 47) ─────────────────────────────────────────
     execute!(out, MoveTo(0, (height - 1) as u16))?;
-    let footer_text = match app.mode {
+    let (left_text, right_text) = match app.mode {
         Mode::Normal => {
             if let Some(ref msg) = app.status_message {
-                format!("  {msg}")
+                (format!("  {msg}"), format!("{}  ", app.current_wiki))
             } else {
-                format!("  {}  (press '?' for help)", app.current_path.display())
+                (format!("  {}", app.current_path.display()), format!("{}  ", app.current_wiki))
             }
         }
-        Mode::Finder => "  [↑/↓] Navigate  [Enter] Select  [Esc] Cancel".to_string(),
-        Mode::Outline => "  [↑/↓] Select Section  [Enter] Jump  [Esc] Cancel".to_string(),
-        Mode::Backlinks => "  [↑/↓] Navigate  [Enter] Open  [Esc] Close".to_string(),
-        Mode::Help => "  [Esc/q/?] Close Help".to_string(),
-        Mode::InPageSearch => "  [Enter] Search  [Esc] Cancel".to_string(),
+        Mode::Finder => ("  [Up/Down] Select  [Enter] Open  [Esc] Cancel".to_string(), "Finder  ".to_string()),
+        Mode::Outline => ("  [Up/Down] Section  [Enter] Jump  [Esc] Close".to_string(), "Outline  ".to_string()),
+        Mode::Backlinks => ("  [Up/Down] Backlink  [Enter] Open  [Esc] Close".to_string(), "Backlinks  ".to_string()),
+        Mode::Help => ("  [Esc/q/?] Close Help".to_string(), "Help  ".to_string()),
+        Mode::InPageSearch => ("  [Enter] Search  [Esc] Cancel".to_string(), "Search  ".to_string()),
     };
 
-    let foot_w = display_width(&footer_text);
-    let foot_pad = width.saturating_sub(foot_w);
+    let left_w = display_width(&left_text);
+    let right_w = display_width(&right_text);
+    let foot_pad = width.saturating_sub(left_w + right_w);
+
     execute!(
         out,
         SetForegroundColor(CColor::DarkGrey),
-        Print(&footer_text),
+        Print(&left_text),
         Print(" ".repeat(foot_pad)),
+        Print(&right_text),
         ResetColor
     )?;
 
@@ -136,22 +142,19 @@ fn draw_minimal_finder(
     height: usize,
     out: &mut std::io::Stdout,
 ) -> std::io::Result<()> {
-    let dialog_w = (width * 3 / 4).clamp(40, 80).min(width);
-    let dialog_h = (height * 3 / 4).clamp(10, 18).min(height);
+    let dialog_w = (width * 4 / 5).clamp(40, 80).min(width);
+    let dialog_h = (height * 3 / 4).clamp(8, 16).min(height);
     let start_x = (width.saturating_sub(dialog_w)) / 2;
     let start_y = (height.saturating_sub(dialog_h)) / 2;
 
-    let bg = CColor::Black;
-    let fg = CColor::White;
-
     for y in 0..dialog_h {
-        execute!(out, MoveTo(start_x as u16, (start_y + y) as u16), SetBackgroundColor(bg), SetForegroundColor(fg))?;
+        execute!(out, MoveTo(start_x as u16, (start_y + y) as u16), SetForegroundColor(CColor::White))?;
         execute!(out, Print(" ".repeat(dialog_w)))?;
     }
 
     // Prompt line
     execute!(out, MoveTo((start_x + 2) as u16, (start_y + 1) as u16), SetForegroundColor(CColor::Cyan))?;
-    execute!(out, Print("> "), SetForegroundColor(CColor::White), Print(&app.finder_query), Print("█"))?;
+    execute!(out, Print("> "), SetForegroundColor(CColor::White), Print(&app.finder_query), Print("_"))?;
 
     // Separator rule
     execute!(out, MoveTo((start_x + 2) as u16, (start_y + 2) as u16), SetForegroundColor(CColor::DarkGrey))?;
@@ -174,10 +177,10 @@ fn draw_minimal_finder(
         let meta_str = format!("{}:{}", hit.wiki, hit.relative.display());
 
         if is_selected {
-            execute!(out, SetForegroundColor(CColor::Cyan))?;
-            let display = format!("❯ {}", title_str);
+            execute!(out, SetForegroundColor(CColor::Cyan), SetAttribute(Attribute::Bold))?;
+            let display = format!("> {}", title_str);
             let padded = pad_display_width(&display, dialog_w.saturating_sub(meta_str.len() + 6));
-            execute!(out, Print(&padded), SetForegroundColor(CColor::DarkGrey), Print(&meta_str))?;
+            execute!(out, Print(&padded), SetAttribute(Attribute::Reset), SetForegroundColor(CColor::DarkGrey), Print(&meta_str))?;
         } else {
             execute!(out, SetForegroundColor(CColor::White))?;
             let display = format!("  {}", title_str);
@@ -196,38 +199,37 @@ fn draw_outline(
     height: usize,
     out: &mut std::io::Stdout,
 ) -> std::io::Result<()> {
-    let dialog_w = (width * 3 / 4).clamp(40, 80).min(width);
+    let dialog_w = (width * 4 / 5).clamp(40, 80).min(width);
     let dialog_h = (height * 3 / 4).clamp(8, 16).min(height);
     let start_x = (width.saturating_sub(dialog_w)) / 2;
     let start_y = (height.saturating_sub(dialog_h)) / 2;
 
-    let bg = CColor::Black;
-    let fg = CColor::White;
-
     for y in 0..dialog_h {
-        execute!(out, MoveTo(start_x as u16, (start_y + y) as u16), SetBackgroundColor(bg), SetForegroundColor(fg))?;
+        execute!(out, MoveTo(start_x as u16, (start_y + y) as u16))?;
         execute!(out, Print(" ".repeat(dialog_w)))?;
     }
 
-    execute!(out, MoveTo((start_x + 2) as u16, (start_y + 1) as u16), SetForegroundColor(CColor::Yellow))?;
-    execute!(out, Print("Document Outline"))?;
+    execute!(out, MoveTo((start_x + 2) as u16, (start_y + 1) as u16), SetForegroundColor(CColor::White), SetAttribute(Attribute::Bold))?;
+    execute!(out, Print("Outline"))?;
+    execute!(out, SetAttribute(Attribute::Reset))?;
 
     execute!(out, MoveTo((start_x + 2) as u16, (start_y + 2) as u16), SetForegroundColor(CColor::DarkGrey))?;
     execute!(out, Print("─".repeat(dialog_w.saturating_sub(4))))?;
 
     let list_h = dialog_h.saturating_sub(4);
-    for (i, (level, title, _)) in app.headings.iter().take(list_h).enumerate() {
+    for (i, h) in app.headings.iter().take(list_h).enumerate() {
         let is_selected = i == app.outline_selected;
         let row_y = start_y + 3 + i;
         execute!(out, MoveTo((start_x + 2) as u16, row_y as u16))?;
 
-        let indent = "  ".repeat(level.saturating_sub(1));
+        let indent = "  ".repeat(h.level.saturating_sub(1));
         if is_selected {
-            execute!(out, SetForegroundColor(CColor::Cyan))?;
-            execute!(out, Print(format!("❯ {indent}{title}")))?;
+            execute!(out, SetForegroundColor(CColor::Cyan), SetAttribute(Attribute::Bold))?;
+            execute!(out, Print(format!("> {indent}{}", h.text)))?;
+            execute!(out, SetAttribute(Attribute::Reset))?;
         } else {
             execute!(out, SetForegroundColor(CColor::White))?;
-            execute!(out, Print(format!("  {indent}{title}")))?;
+            execute!(out, Print(format!("  {indent}{}", h.text)))?;
         }
     }
 
@@ -241,20 +243,19 @@ fn draw_backlinks(
     height: usize,
     out: &mut std::io::Stdout,
 ) -> std::io::Result<()> {
-    let dialog_w = (width * 3 / 4).clamp(40, 80).min(width);
+    let dialog_w = (width * 4 / 5).clamp(40, 80).min(width);
     let dialog_h = (height * 3 / 4).clamp(8, 16).min(height);
     let start_x = (width.saturating_sub(dialog_w)) / 2;
     let start_y = (height.saturating_sub(dialog_h)) / 2;
 
-    let bg = CColor::Black;
-
     for y in 0..dialog_h {
-        execute!(out, MoveTo(start_x as u16, (start_y + y) as u16), SetBackgroundColor(bg))?;
+        execute!(out, MoveTo(start_x as u16, (start_y + y) as u16))?;
         execute!(out, Print(" ".repeat(dialog_w)))?;
     }
 
-    execute!(out, MoveTo((start_x + 2) as u16, (start_y + 1) as u16), SetForegroundColor(CColor::Magenta))?;
-    execute!(out, Print(format!("Backlinks to '{}' ({})", app.current_title, app.backlinks.len())))?;
+    execute!(out, MoveTo((start_x + 2) as u16, (start_y + 1) as u16), SetForegroundColor(CColor::White), SetAttribute(Attribute::Bold))?;
+    execute!(out, Print(format!("Backlinks · {}", app.current_title)))?;
+    execute!(out, SetAttribute(Attribute::Reset))?;
 
     execute!(out, MoveTo((start_x + 2) as u16, (start_y + 2) as u16), SetForegroundColor(CColor::DarkGrey))?;
     execute!(out, Print("─".repeat(dialog_w.saturating_sub(4))))?;
@@ -266,8 +267,9 @@ fn draw_backlinks(
         execute!(out, MoveTo((start_x + 2) as u16, row_y as u16))?;
 
         if is_selected {
-            execute!(out, SetForegroundColor(CColor::Cyan))?;
-            execute!(out, Print(format!("❯ {} ({}:{})", b.from_title, b.from_wiki, b.from_relative.display())))?;
+            execute!(out, SetForegroundColor(CColor::Cyan), SetAttribute(Attribute::Bold))?;
+            execute!(out, Print(format!("> {} ({}:{})", b.from_title, b.from_wiki, b.from_relative.display())))?;
+            execute!(out, SetAttribute(Attribute::Reset))?;
         } else {
             execute!(out, SetForegroundColor(CColor::White))?;
             execute!(out, Print(format!("  {} ({}:{})", b.from_title, b.from_wiki, b.from_relative.display())))?;
@@ -284,18 +286,16 @@ fn draw_help(width: usize, height: usize, out: &mut std::io::Stdout) -> std::io:
     let start_x = (width.saturating_sub(dialog_w)) / 2;
     let start_y = (height.saturating_sub(dialog_h)) / 2;
 
-    let bg = CColor::Black;
-
     for y in 0..dialog_h {
-        execute!(out, MoveTo(start_x as u16, (start_y + y) as u16), SetBackgroundColor(bg))?;
+        execute!(out, MoveTo(start_x as u16, (start_y + y) as u16))?;
         execute!(out, Print(" ".repeat(dialog_w)))?;
     }
 
     let help_lines = [
         "TerminalWiki Keybindings",
         "──────────────────────────────────────────",
-        "j / ↓         Scroll down",
-        "k / ↑         Scroll up",
+        "j / Down      Scroll down",
+        "k / Up        Scroll up",
         "Ctrl+d / u    Half-page down / up",
         "g / G         Jump to top / bottom",
         "Tab / S-Tab   Cycle through page links",
@@ -327,7 +327,7 @@ fn draw_search_bar(
     height: usize,
     out: &mut std::io::Stdout,
 ) -> std::io::Result<()> {
-    execute!(out, MoveTo(0, (height - 2) as u16), SetBackgroundColor(CColor::Black), SetForegroundColor(CColor::Yellow))?;
+    execute!(out, MoveTo(0, (height - 2) as u16), SetForegroundColor(CColor::Yellow))?;
     let prompt = format!(" /{}█", app.in_page_query);
     let pad = width.saturating_sub(display_width(&prompt));
     execute!(out, Print(&prompt), Print(" ".repeat(pad)), ResetColor)?;

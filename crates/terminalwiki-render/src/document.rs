@@ -11,14 +11,39 @@ pub struct Span {
     pub style: Style,
 }
 
+/// Target type of a rendered link.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LinkTarget {
+    Wiki(String),
+    External(String),
+    File(String),
+    Heading(String),
+}
+
+/// A rendered link with visual position and target.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderedLink {
+    pub line: usize,
+    pub start_column: usize,
+    pub end_column: usize,
+    pub target: LinkTarget,
+    pub label: String,
+}
+
+/// Heading metadata for navigation and outline views.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderedHeading {
+    pub level: usize,
+    pub text: String,
+    pub line: usize,
+}
+
 /// A rendered document ready for terminal display or TUI navigation.
 #[derive(Debug, Clone, Default)]
 pub struct RenderedDocument {
     pub lines: Vec<RenderedLine>,
-    /// Headings: (level, text, line_index)
-    pub headings: Vec<(usize, String, usize)>,
-    /// Embedded links: (line_index, target_url_or_wiki_link)
-    pub links: Vec<(usize, String)>,
+    pub headings: Vec<RenderedHeading>,
+    pub links: Vec<RenderedLink>,
 }
 
 /// Inline formatting elements.

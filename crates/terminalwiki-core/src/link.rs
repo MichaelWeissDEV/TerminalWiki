@@ -284,11 +284,9 @@ pub fn heading_anchor(heading: &str) -> String {
         if c.is_alphanumeric() {
             out.extend(c.to_lowercase());
             last_dash = false;
-        } else if c == '-' || c == '_' || c.is_whitespace() {
-            if !out.is_empty() && !last_dash {
-                out.push('-');
-                last_dash = true;
-            }
+        } else if (c == '-' || c == '_' || c.is_whitespace()) && !out.is_empty() && !last_dash {
+            out.push('-');
+            last_dash = true;
         }
         // Everything else (punctuation, emoji) is dropped, as GitHub does.
     }

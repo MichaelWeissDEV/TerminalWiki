@@ -3,15 +3,14 @@
 use std::fs;
 use std::path::PathBuf;
 
-use terminalwiki_core::filetype::{classify, ContentType};
 use terminalwiki_core::resolve;
 use terminalwiki_core::wiki::WikiSet;
 use terminalwiki_core::{Config, Error, Result};
 use terminalwiki_graph::{BacklinkInfo, GraphEntry, WikiGraph};
 use terminalwiki_index::{FuzzyDataset, FuzzyHit, FuzzyItem};
 use terminalwiki_render::{
-    detect_color_mode, render_code_file, render_markdown, ColorMode, RenderedDocument, RenderedLine,
-    Theme,
+    detect_color_mode, render_markdown, render_path, ColorMode, RenderedDocument,
+    RenderedHeading, RenderedLine, RenderedLink, Theme,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,14 +33,14 @@ pub struct App<'a> {
     pub current_path: PathBuf,
     pub current_title: String,
     pub lines: Vec<RenderedLine>,
-    pub headings: Vec<(usize, String, usize)>, // (level, text, line_index)
+    pub headings: Vec<RenderedHeading>,
+    pub links: Vec<RenderedLink>,
     pub raw_content: String,
     pub scroll: usize,
 
     pub history_back: Vec<(String, PathBuf, usize)>,
     pub history_forward: Vec<(String, PathBuf, usize)>,
 
-    pub extracted_links: Vec<(usize, String)>, // (line_idx, target)
     pub selected_link_idx: Option<usize>,
 
     pub mode: Mode,
@@ -86,7 +85,7 @@ impl<'a> App<'a> {
             .or_else(|| wikis.default_wiki().map(|w| w.name.clone()))
             .ok_or(Error::NoWikiConfigured)?;
 
-        // Build Nucleo fuzzy items from index or file scan
+        // Build Nucleo fuzzy dataset from index or file scan
         let mut fuzzy_items = Vec::new();
         for wiki in wikis.iter() {
             if let Ok(idx) = terminalwiki_index::WikiIndex::load(&wiki.name) {
@@ -134,11 +133,11 @@ impl<'a> App<'a> {
             current_title: String::new(),
             lines: Vec::new(),
             headings: Vec::new(),
+            links: Vec::new(),
             raw_content: String::new(),
             scroll: 0,
             history_back: Vec::new(),
             history_forward: Vec::new(),
-            extracted_links: Vec::new(),
             selected_link_idx: None,
             mode: Mode::Normal,
             finder_query: String::new(),
@@ -169,18 +168,35 @@ impl<'a> App<'a> {
     }
 
     pub fn load_home(&mut self, wiki_name: &str) -> Result<()> {
-        let candidates = ["index.md", "README.md", "Home.md", "home.md"];
-        for c in &candidates {
-            if self.load_page(wiki_name, c, false).is_ok() {
-                return Ok(());
+        let wiki = self.wikis.require(wiki_name)?;
+
+        // Phase 11: strict home_page() usage
+        if let Some(home_path) = wiki.home_page() {
+            let path_str = home_path.to_string_lossy().into_owned();
+            return self.load_page(wiki_name, &path_str, false);
+        }
+
+        // Phase 12: Virtual Home Overview
+        let mut overview = format!("# {}\n\n*Knowledge base overview*\n\n## Pages\n\n", wiki.name);
+        let files = terminalwiki_core::scan::scan(wiki, &self.config.index);
+        for file in files {
+            if file.content_type.is_page() {
+                let path_str = file.relative.to_string_lossy();
+                overview.push_str(&format!("- [[{}]]\n", path_str));
             }
         }
-        if let Some(first) = self.finder_filtered.first() {
-            let p = first.relative.to_string_lossy().into_owned();
-            let w = first.wiki.clone();
-            return self.load_page(&w, &p, false);
-        }
-        self.mode = Mode::Finder;
+
+        let doc: RenderedDocument = render_markdown(&overview, self.config, &self.theme, self.color_mode);
+        self.current_wiki = wiki_name.to_string();
+        self.current_path = PathBuf::from("index.md");
+        self.current_title = wiki.name.clone();
+        self.lines = doc.lines;
+        self.headings = doc.headings;
+        self.links = doc.links;
+        self.raw_content = overview;
+        self.scroll = 0;
+        self.selected_link_idx = if !self.links.is_empty() { Some(0) } else { None };
+
         Ok(())
     }
 
@@ -198,22 +214,9 @@ impl<'a> App<'a> {
 
         let bytes = fs::read(&resolution.path).map_err(|e| Error::io(&resolution.path, e))?;
         let text = String::from_utf8_lossy(&bytes).into_owned();
-        let content_type = classify(&resolution.path, &bytes);
 
-        let doc: RenderedDocument = if content_type == ContentType::Code {
-            let lang = terminalwiki_core::filetype::language_for(&resolution.path);
-            render_code_file(
-                &text,
-                lang,
-                &resolution.path,
-                self.config,
-                &self.theme,
-                self.color_mode,
-                None,
-            )
-        } else {
-            render_markdown(&text, self.config, &self.theme, self.color_mode)
-        };
+        // Phase 13: Centralized render_path dispatch
+        let doc: RenderedDocument = render_path(&resolution.path, &bytes, self.config, &self.theme, self.color_mode);
 
         self.current_wiki = resolution.wiki.clone();
         self.current_path = resolution.relative.clone();
@@ -224,10 +227,10 @@ impl<'a> App<'a> {
             .unwrap_or_else(|| page_str.to_string());
         self.lines = doc.lines;
         self.headings = doc.headings;
-        self.extracted_links = doc.links;
+        self.links = doc.links;
         self.raw_content = text;
         self.scroll = 0;
-        self.selected_link_idx = if !self.extracted_links.is_empty() {
+        self.selected_link_idx = if !self.links.is_empty() {
             Some(0)
         } else {
             None

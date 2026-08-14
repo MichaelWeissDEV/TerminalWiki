@@ -3,7 +3,9 @@
 use terminalwiki_core::unicode::{display_width, pad_display_width};
 
 use crate::ansi::{ColorMode, Style};
-use crate::document::{Block, Document, Inline, RenderedDocument, Span};
+use crate::document::{
+    Block, Document, Inline, LinkTarget, RenderedDocument, RenderedHeading, RenderedLink, Span,
+};
 use crate::highlight::highlight;
 use crate::theme::{SemanticColor, Theme};
 use crate::width::wrap_text;
@@ -42,7 +44,12 @@ impl<'a> Renderer<'a> {
         match block {
             Block::Heading(level, inlines) => {
                 let text = inlines.iter().map(|i| i.plain_text()).collect::<String>();
-                rdoc.headings.push((*level, text.clone(), rdoc.lines.len()));
+                let current_line = rdoc.lines.len();
+                rdoc.headings.push(RenderedHeading {
+                    level: *level,
+                    text: text.clone(),
+                    line: current_line,
+                });
 
                 let prefix = "#".repeat(*level);
                 let heading_style = self.theme.style(SemanticColor::Heading).bold();
@@ -219,7 +226,14 @@ impl<'a> Renderer<'a> {
                 }
                 Inline::Link { target, text } => {
                     let line_no = rdoc.lines.len();
-                    rdoc.links.push((line_no, target.clone()));
+                    let label = text.iter().map(|i| i.plain_text()).collect::<String>();
+                    rdoc.links.push(RenderedLink {
+                        line: line_no,
+                        start_column: 0,
+                        end_column: display_width(&label),
+                        target: LinkTarget::External(target.clone()),
+                        label: label.clone(),
+                    });
                     for mut s in self.render_inlines(text, rdoc) {
                         s.style = self.theme.style(SemanticColor::Link).underline();
                         spans.push(s);
@@ -227,10 +241,17 @@ impl<'a> Renderer<'a> {
                 }
                 Inline::WikiLink { target, label } => {
                     let line_no = rdoc.lines.len();
-                    rdoc.links.push((line_no, target.clone()));
                     let display_text = label.as_deref().unwrap_or(target.as_str());
+                    let full_display = format!("[[{display_text}]]");
+                    rdoc.links.push(RenderedLink {
+                        line: line_no,
+                        start_column: 0,
+                        end_column: display_width(&full_display),
+                        target: LinkTarget::Wiki(target.clone()),
+                        label: display_text.to_string(),
+                    });
                     spans.push(Span {
-                        text: format!("[[{display_text}]]"),
+                        text: full_display,
                         style: self.theme.style(SemanticColor::Link).bold(),
                     });
                 }

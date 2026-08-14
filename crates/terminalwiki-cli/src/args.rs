@@ -243,17 +243,17 @@ impl Args {
                     if arg == "--depth" && j + 1 < positional.len() {
                         depth = positional[j+1].parse().ok();
                         j += 2;
-                    } else if arg.starts_with("--depth=") {
-                        depth = arg["--depth=".len()..].parse().ok();
+                    } else if let Some(val) = arg.strip_prefix("--depth=") {
+                        depth = val.parse().ok();
                         j += 1;
                     } else if arg == "--format" && j + 1 < positional.len() {
                         format = Some(positional[j+1].clone());
                         j += 2;
-                    } else if arg.starts_with("--format=") {
-                        format = Some(arg["--format=".len()..].to_string());
+                    } else if let Some(val) = arg.strip_prefix("--format=") {
+                        format = Some(val.to_string());
                         j += 1;
                     } else {
-                        if page.is_none() && !arg.starts_with("-") {
+                        if page.is_none() && !arg.starts_with('-') {
                             page = Some(arg.clone());
                         }
                         j += 1;

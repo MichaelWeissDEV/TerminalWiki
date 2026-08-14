@@ -79,7 +79,7 @@ impl FuzzyDataset {
                 let title_utf32 = Utf32Str::new(&item.title, &mut buf);
                 let mut indices = Vec::new();
                 if let Some(score) = pattern.indices(title_utf32, &mut self.matcher, &mut indices) {
-                    best_score = (score as u32) + 200;
+                    best_score = score + 200;
                     best_indices = indices;
                 }
             }
@@ -89,9 +89,8 @@ impl FuzzyDataset {
             let path_utf32 = Utf32Str::new(&rel_str, &mut buf);
             let mut indices = Vec::new();
             if let Some(score) = pattern.indices(path_utf32, &mut self.matcher, &mut indices) {
-                let s = score as u32;
-                if s > best_score {
-                    best_score = s;
+                if score > best_score {
+                    best_score = score;
                     best_indices = indices;
                 }
             }
@@ -102,7 +101,7 @@ impl FuzzyDataset {
                 let alias_utf32 = Utf32Str::new(alias, &mut buf);
                 let mut indices = Vec::new();
                 if let Some(score) = pattern.indices(alias_utf32, &mut self.matcher, &mut indices) {
-                    let s = (score as u32) + 150;
+                    let s = score + 150;
                     if s > best_score {
                         best_score = s;
                         best_indices = indices;
@@ -121,7 +120,7 @@ impl FuzzyDataset {
             }
         }
 
-        scored.sort_by(|a, b| b.score.cmp(&a.score));
+        scored.sort_by_key(|b| std::cmp::Reverse(b.score));
         scored.truncate(limit);
         scored
     }

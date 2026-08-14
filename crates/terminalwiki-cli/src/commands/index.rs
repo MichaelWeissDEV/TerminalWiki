@@ -24,18 +24,13 @@ fn status(_config: Config, wikis: WikiSet) -> Result<()> {
         let dir = terminalwiki_core::paths::index_dir_for(&wiki.name);
         println!("{}", wiki.name);
         if let Some(dir) = dir {
-            let meta_file = dir.join("meta.json");
-            if meta_file.exists() {
-                if let Ok(text) = std::fs::read_to_string(&meta_file) {
-                    if let Ok(meta) = serde_json::from_str::<terminalwiki_index::IndexMeta>(&text) {
-                        let formatted_ts = terminalwiki_core::scan::format_timestamp(meta.built_at);
-                        println!("  documents      {}", meta.document_count);
-                        println!("  schema         {}", meta.schema_version);
-                        println!("  updated        {}", formatted_ts);
-                        println!("  state          ready");
-                        continue;
-                    }
-                }
+            if let Ok(Some(state)) = terminalwiki_index::store::load_meta(&dir) {
+                let formatted_ts = terminalwiki_core::scan::format_timestamp(state.built_at);
+                println!("  documents      {}", state.document_count);
+                println!("  schema         {}", state.schema_version);
+                println!("  updated        {}", formatted_ts);
+                println!("  state          ready");
+                continue;
             }
             println!("  state          not built");
         } else {

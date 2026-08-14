@@ -92,34 +92,32 @@ pub fn render_graph(
     grid.into_iter().map(|row| row.into_iter().collect()).collect()
 }
 
-fn draw_line(grid: &mut Vec<Vec<char>>, mut x0: isize, mut y0: isize, x1: isize, y1: isize) {
-    let width = grid[0].len() as isize;
-    let height = grid.len() as isize;
-
+fn draw_line(grid: &mut [Vec<char>], mut x0: isize, mut y0: isize, x1: isize, y1: isize) {
     let dx = (x1 - x0).abs();
     let sx = if x0 < x1 { 1 } else { -1 };
     let dy = -(y1 - y0).abs();
     let sy = if y0 < y1 { 1 } else { -1 };
     let mut err = dx + dy;
 
-    // determine character based on slope
-    let ch = if dx == 0 {
-        '│'
-    } else if dy == 0 {
-        '─'
-    } else if (sx > 0 && sy > 0) || (sx < 0 && sy < 0) {
-        '\\'
-    } else {
-        '/'
-    };
+    let height = grid.len() as isize;
+    let width = if height > 0 { grid[0].len() as isize } else { 0 };
 
     loop {
-        if x0 >= 0 && x0 < width && y0 >= 0 && y0 < height {
-            if grid[y0 as usize][x0 as usize] == ' ' {
-                grid[y0 as usize][x0 as usize] = ch;
-            }
+        let ch = if dx > -dy {
+            '─'
+        } else if -dy > dx {
+            '│'
+        } else {
+            '·'
+        };
+
+        if x0 >= 0 && x0 < width && y0 >= 0 && y0 < height && grid[y0 as usize][x0 as usize] == ' ' {
+            grid[y0 as usize][x0 as usize] = ch;
         }
-        if x0 == x1 && y0 == y1 { break; }
+
+        if x0 == x1 && y0 == y1 {
+            break;
+        }
         let e2 = 2 * err;
         if e2 >= dy {
             err += dy;

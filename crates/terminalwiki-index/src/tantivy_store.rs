@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use tantivy::collector::TopDocs;
-use tantivy::query::{AllQuery, BooleanQuery, Occur, Query as TantivyQuery, TermQuery};
+use tantivy::query::{AllQuery, BooleanQuery, BoostQuery, Occur, Query as TantivyQuery, TermQuery};
 use tantivy::schema::*;
 use tantivy::snippet::SnippetGenerator;
 use tantivy::{doc, Index, IndexReader, IndexWriter, ReloadPolicy, Term};
@@ -107,8 +107,13 @@ impl TantivyStore {
         )
     }
 
-    /// Opens or initializes the Tantivy index in `dir`.
-    pub fn open_or_create(dir: &Path) -> Result<Self> {
+    /// Read-only access to an existing Tantivy index in `dir/tantivy`.
+    pub fn open_reader(dir: &Path) -> Result<Self> {
+        let tantivy_dir = dir.join("tantivy");
+        if !tantivy_dir.exists() {
+            return Err(Error::index("Search index is unavailable. Run 'tw index rebuild' first."));
+        }
+
         let (
             schema,
             f_wiki,
@@ -125,36 +130,8 @@ impl TantivyStore {
             f_size,
         ) = Self::build_schema();
 
-        fs::create_dir_all(dir).map_err(|e| Error::io(dir, e))?;
-
-        let meta_file = dir.join("meta.json");
-        let mut needs_rebuild = false;
-
-        if meta_file.exists() {
-            if let Ok(text) = fs::read_to_string(&meta_file) {
-                if let Ok(meta) = serde_json::from_str::<IndexMeta>(&text) {
-                    if meta.schema_version != INDEX_SCHEMA_VERSION {
-                        needs_rebuild = true;
-                    }
-                } else {
-                    needs_rebuild = true;
-                }
-            } else {
-                needs_rebuild = true;
-            }
-        }
-
-        if needs_rebuild {
-            let _ = fs::remove_dir_all(dir);
-            fs::create_dir_all(dir).map_err(|e| Error::io(dir, e))?;
-        }
-
-        let index = if !needs_rebuild {
-            Index::open_in_dir(dir).unwrap_or_else(|_| Index::create_in_dir(dir, schema.clone()).expect("create tantivy index"))
-        } else {
-            Index::create_in_dir(dir, schema.clone())
-                .map_err(|e| Error::index(format!("Failed to create index: {e}")))?
-        };
+        let index = Index::open_in_dir(&tantivy_dir)
+            .map_err(|e| Error::index(format!("Failed to open index: {e}. Run 'tw index rebuild'.")))?;
 
         let reader = index
             .reader_builder()
@@ -181,14 +158,63 @@ impl TantivyStore {
         })
     }
 
-    /// Indexes or updates entries in the Tantivy index.
-    pub fn update_entries(&mut self, dir: &Path, entries: &[IndexEntry]) -> Result<()> {
+    /// Creates or opens index for writing in `dir/tantivy`.
+    pub fn open_or_create(dir: &Path) -> Result<Self> {
+        let tantivy_dir = dir.join("tantivy");
+        fs::create_dir_all(&tantivy_dir).map_err(|e| Error::io(&tantivy_dir, e))?;
+
+        let (
+            schema,
+            f_wiki,
+            f_path,
+            f_relative,
+            f_title,
+            f_aliases,
+            f_headings,
+            f_body,
+            f_tags,
+            f_extension,
+            f_content_type,
+            f_mtime,
+            f_size,
+        ) = Self::build_schema();
+
+        let index = Index::open_in_dir(&tantivy_dir)
+            .unwrap_or_else(|_| Index::create_in_dir(&tantivy_dir, schema.clone()).expect("create tantivy index"));
+
+        let reader = index
+            .reader_builder()
+            .reload_policy(ReloadPolicy::OnCommitWithDelay)
+            .try_into()
+            .map_err(|e| Error::index(format!("Failed to create index reader: {e}")))?;
+
+        Ok(Self {
+            index,
+            reader,
+            _schema: schema,
+            f_wiki,
+            f_path,
+            f_relative,
+            f_title,
+            f_aliases,
+            f_headings,
+            f_body,
+            f_tags,
+            f_extension,
+            f_content_type,
+            f_mtime,
+            f_size,
+        })
+    }
+
+    /// Indexes entries in the Tantivy index.
+    pub fn update_entries(&mut self, _dir: &Path, entries: &[IndexEntry]) -> Result<()> {
         let mut writer: IndexWriter = self
             .index
             .writer(50_000_000) // 50 MB buffer
             .map_err(|e| Error::index(format!("Failed to acquire index writer: {e}")))?;
 
-        // Clear existing docs to prevent duplication
+        // Clear existing docs to prevent duplication on rebuild
         writer
             .delete_all_documents()
             .map_err(|e| Error::index(format!("Failed to clear index: {e}")))?;
@@ -229,20 +255,6 @@ impl TantivyStore {
             .commit()
             .map_err(|e| Error::index(format!("Failed to commit index: {e}")))?;
 
-        // Write metadata
-        let meta = IndexMeta {
-            schema_version: INDEX_SCHEMA_VERSION,
-            built_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
-            document_count: entries.len(),
-        };
-        let meta_json = serde_json::to_string_pretty(&meta)
-            .map_err(|e| Error::index(format!("Failed to serialize index meta: {e}")))?;
-        fs::write(dir.join("meta.json"), meta_json)
-            .map_err(|e| Error::io(dir.join("meta.json"), e))?;
-
         self.reader
             .reload()
             .map_err(|e| Error::index(format!("Failed to reload reader: {e}")))?;
@@ -277,7 +289,6 @@ impl TantivyStore {
                 let s = gen.snippet_from_doc(&doc);
                 let html = s.to_html();
                 if !html.is_empty() {
-                    // Clean HTML tags from tantivy snippet
                     let clean = html.replace("<b>", "").replace("</b>", "");
                     Some(clean)
                 } else {
@@ -311,12 +322,14 @@ impl TantivyStore {
             match term {
                 QueryTerm::Text(t) => {
                     let mut sub_clauses: Vec<(Occur, Box<dyn TantivyQuery>)> = Vec::new();
-                    // Match against title, aliases, headings, and body
                     for word in t.split_whitespace() {
                         let w_lower = word.to_lowercase();
-                        let q_title: Box<dyn TantivyQuery> = Box::new(TermQuery::new(
-                            Term::from_field_text(self.f_title, &w_lower),
-                            IndexRecordOption::WithFreqsAndPositions,
+                        let q_title: Box<dyn TantivyQuery> = Box::new(BoostQuery::new(
+                            Box::new(TermQuery::new(
+                                Term::from_field_text(self.f_title, &w_lower),
+                                IndexRecordOption::WithFreqsAndPositions,
+                            )),
+                            5.0, // Title matches boosted by 5x
                         ));
                         let q_body: Box<dyn TantivyQuery> = Box::new(TermQuery::new(
                             Term::from_field_text(self.f_body, &w_lower),
@@ -358,9 +371,12 @@ impl TantivyStore {
                     clauses.push((Occur::Must, q));
                 }
                 QueryTerm::Title(t) => {
-                    let q: Box<dyn TantivyQuery> = Box::new(TermQuery::new(
-                        Term::from_field_text(self.f_title, &t.to_lowercase()),
-                        IndexRecordOption::WithFreqsAndPositions,
+                    let q: Box<dyn TantivyQuery> = Box::new(BoostQuery::new(
+                        Box::new(TermQuery::new(
+                            Term::from_field_text(self.f_title, &t.to_lowercase()),
+                            IndexRecordOption::WithFreqsAndPositions,
+                        )),
+                        10.0,
                     ));
                     clauses.push((Occur::Must, q));
                 }
@@ -371,6 +387,16 @@ impl TantivyStore {
                     ));
                     clauses.push((Occur::Must, q));
                 }
+                QueryTerm::LinksTo(l) => {
+                    return Err(Error::invalid_arguments(format!(
+                        "Query filter 'linksto:{l}' is only supported in graph queries"
+                    )));
+                }
+                QueryTerm::Backlink(b) => {
+                    return Err(Error::invalid_arguments(format!(
+                        "Query filter 'backlink:{b}' is only supported in graph queries"
+                    )));
+                }
                 QueryTerm::Not(inner) => {
                     if let QueryTerm::Tag(t) = &**inner {
                         let q: Box<dyn TantivyQuery> = Box::new(TermQuery::new(
@@ -380,7 +406,6 @@ impl TantivyStore {
                         clauses.push((Occur::MustNot, q));
                     }
                 }
-                _ => {}
             }
         }
 

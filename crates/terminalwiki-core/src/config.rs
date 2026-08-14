@@ -248,7 +248,7 @@ pub struct TerminalConfig {
 }
 
 /// Fully resolved configuration.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Config {
     pub default_wiki: Option<String>,
     pub editor: Option<String>,
@@ -261,23 +261,6 @@ pub struct Config {
     pub wikis: Vec<WikiEntry>,
     /// Where the global config was read from, for `tw config` and `tw doctor`.
     pub source: Option<PathBuf>,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Config {
-            default_wiki: None,
-            editor: None,
-            theme: Theme::default(),
-            naming: NamingPolicy::default(),
-            render: RenderConfig::default(),
-            index: IndexConfig::default(),
-            tui: TuiConfig::default(),
-            terminal: TerminalConfig::default(),
-            wikis: Vec::new(),
-            source: None,
-        }
-    }
 }
 
 impl Config {
@@ -384,7 +367,7 @@ struct GlobalFile {
     tui: Option<TuiFile>,
     #[serde(default)]
     terminal: Option<TerminalFile>,
-    #[serde(default, rename = "wiki")]
+    #[serde(default, rename = "wiki", alias = "wikis")]
     wikis: Vec<WikiFile>,
 }
 
@@ -425,7 +408,7 @@ struct TerminalFile {
 struct WikiFile {
     name: String,
     path: String,
-    #[serde(default)]
+    #[serde(default, alias = "mounts")]
     mount: Vec<String>,
 }
 

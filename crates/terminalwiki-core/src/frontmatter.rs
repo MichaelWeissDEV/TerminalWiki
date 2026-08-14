@@ -125,14 +125,12 @@ fn strip_opening_fence(text: &str) -> Option<&str> {
 /// the number of lines in the block.
 fn find_closing_fence(rest: &str) -> Option<(&str, usize, usize)> {
     let mut offset = 0usize;
-    let mut lines = 0usize;
-    for line in rest.split_inclusive('\n') {
+    for (lines, line) in rest.split_inclusive('\n').enumerate() {
         let trimmed = line.trim_end_matches(['\n', '\r']);
         if trimmed == "---" || trimmed == "..." {
             return Some((&rest[..offset], offset + line.len(), lines));
         }
         offset += line.len();
-        lines += 1;
     }
     None
 }

@@ -3,15 +3,11 @@
 use std::fs;
 use std::path::Path;
 
-use terminalwiki_core::filetype::{classify, ContentType};
 use terminalwiki_core::resolve;
 use terminalwiki_core::sanitize::sanitize_line;
 use terminalwiki_core::wiki::WikiSet;
 use terminalwiki_core::{Config, Error, Result};
-use terminalwiki_render::{
-    detect_color_mode, render_binary_info, render_code_file, render_markdown, write_document,
-    ColorMode, Theme,
-};
+use terminalwiki_render::{detect_color_mode, render_markdown, render_path, write_document, ColorMode, Theme};
 
 use crate::args::Args;
 use crate::output;
@@ -40,7 +36,7 @@ pub fn show_page(
         if let Some(home_path) = wiki.home_page() {
             return display_file(&home_path, args.plain, args.no_color, &config);
         } else {
-            // Generate automatic wiki overview (spec §10)
+            // Generate virtual home overview (Phase 12)
             return render_wiki_overview(wiki, &config, args.plain, args.no_color);
         }
     }
@@ -61,7 +57,6 @@ fn display_file(
     }
 
     let bytes = fs::read(path).map_err(|e| Error::io(path, e))?;
-    let content_type = classify(path, &bytes);
 
     let disable_color = plain || no_color || !output::is_stdout_tty();
     let theme = match config.theme {
@@ -75,36 +70,9 @@ fn display_file(
         detect_color_mode()
     };
 
-    match content_type {
-        ContentType::Binary => {
-            let meta = fs::metadata(path).map_err(|e| Error::io(path, e))?;
-            let mtime = meta
-                .modified()
-                .map(|t| t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs())
-                .unwrap_or(0);
-            let doc = render_binary_info(path, meta.len(), mtime);
-            write_document(&doc, &mut std::io::stdout(), color_mode)
-                .map_err(|e| Error::other(format!("Write error: {e}")))?;
-        }
-        ContentType::Code => {
-            let text = String::from_utf8_lossy(&bytes);
-            let lang = terminalwiki_core::filetype::language_for(path);
-            let doc = render_code_file(&text, lang, path, config, &theme, color_mode, None);
-            write_document(&doc, &mut std::io::stdout(), color_mode)
-                .map_err(|e| Error::other(format!("Write error: {e}")))?;
-        }
-        ContentType::Markdown | ContentType::Text | ContentType::Latex | ContentType::Image => {
-            let text = String::from_utf8_lossy(&bytes);
-            if disable_color {
-                output::writeln_sanitized(&mut std::io::stdout(), &text)
-                    .map_err(|e| Error::other(format!("Write error: {e}")))?;
-            } else {
-                let doc = render_markdown(&text, config, &theme, color_mode);
-                write_document(&doc, &mut std::io::stdout(), color_mode)
-                    .map_err(|e| Error::other(format!("Write error: {e}")))?;
-            }
-        }
-    }
+    let doc = render_path(path, &bytes, config, &theme, color_mode);
+    write_document(&doc, &mut std::io::stdout(), color_mode)
+        .map_err(|e| Error::other(format!("Write error: {e}")))?;
 
     Ok(())
 }
@@ -125,7 +93,11 @@ fn render_wiki_overview(
     }
 
     let disable_color = plain || no_color || !output::is_stdout_tty();
-    let theme = Theme::Dark;
+    let theme = match config.theme {
+        terminalwiki_core::config::Theme::Light => Theme::Light,
+        terminalwiki_core::config::Theme::Mono => Theme::Mono,
+        _ => Theme::Dark,
+    };
     let color_mode = if disable_color {
         ColorMode::Never
     } else {

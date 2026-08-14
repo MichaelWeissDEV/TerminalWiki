@@ -20,9 +20,10 @@ pub use backlinks::BacklinkResult;
 pub use entry::IndexEntry;
 pub use fuzzy::{FuzzyDataset, FuzzyHit, FuzzyItem};
 pub use query::{Query, QueryTerm};
+pub use store::IndexState;
 pub use tantivy_store::{IndexMeta, SearchHit, TantivyStore, INDEX_SCHEMA_VERSION};
 
-/// High-level interface to a wiki's search index.
+/// High-level facade for a wiki's search index.
 pub struct WikiIndex {
     pub wiki_name: String,
     pub entries: Vec<IndexEntry>,
@@ -42,7 +43,7 @@ impl WikiIndex {
         })
     }
 
-    /// Builds a fresh index by scanning the wiki.
+    /// Builds a fresh index by scanning the wiki and rebuilding Tantivy.
     pub fn build(wiki: &Wiki, config: &Config) -> Result<WikiIndex> {
         let entries = indexer::update_index(wiki, config, None)?;
         let index = WikiIndex {
@@ -78,21 +79,18 @@ impl WikiIndex {
         store::save_index(&dir, &self.entries)
     }
 
-    /// Searches the persistent Tantivy index.
+    /// Searches the persistent Tantivy index strictly read-only without destructive mutations.
     pub fn search(&self, query: &Query) -> Result<Vec<SearchHit>> {
         let dir = paths::index_dir_for(&self.wiki_name).ok_or_else(|| Error::Config {
             path: None,
             message: "Cannot determine index directory".into(),
         })?;
 
-        if let Ok(store) = TantivyStore::open_or_create(&dir) {
-            store.search(query, 50)
-        } else {
-            Ok(Vec::new())
-        }
+        let store = TantivyStore::open_reader(&dir)?;
+        store.search(query, 50)
     }
 
-    /// Performs instant fuzzy search across page titles, paths, and aliases using Nucleo.
+    /// Performs instant fuzzy search across page titles, paths, aliases, and tags using Nucleo.
     pub fn find(&self, needle: &str, limit: usize) -> Vec<FuzzyHit> {
         let items: Vec<FuzzyItem> = self
             .entries

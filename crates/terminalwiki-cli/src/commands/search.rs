@@ -1,4 +1,4 @@
-//! `tw search QUERY` — search the knowledge base using Tantivy full-text index (spec §13, §14).
+//! `tw search QUERY` — search the knowledge base using Tantivy full-text index (spec §13, §14, §30-§34).
 
 use std::str::FromStr;
 
@@ -29,68 +29,74 @@ pub fn search(query: String, args: Args, _config: Config, wikis: WikiSet) -> Res
         return Err(Error::NoWikiConfigured);
     }
 
+    // Mutually exclusive flag validation (Phase 34)
+    if args.json && args.jsonl {
+        return Err(Error::invalid_arguments("Flags --json and --jsonl are mutually exclusive."));
+    }
+    if args.path_only && (args.json || args.jsonl) {
+        return Err(Error::invalid_arguments("Flag --path-only cannot be combined with --json or --jsonl."));
+    }
+
     let q = terminalwiki_index::Query::from_str(&query)
         .map_err(|e| Error::invalid_arguments(format!("Invalid search query: {e}")))?;
 
+    // Determine target wikis (Phase 31 & 32)
+    let target_wikis: Vec<&terminalwiki_core::wiki::Wiki> = if args.all {
+        wikis.iter().collect()
+    } else if let Some(ref w_name) = args.wiki {
+        vec![wikis.require(w_name)?]
+    } else {
+        let def = wikis.default_wiki().ok_or(Error::NoWikiConfigured)?;
+        vec![def]
+    };
+
     let mut json_results = Vec::new();
     let mut any_hits = false;
-    let mut index_checked = false;
 
-    for wiki in wikis.iter() {
-        let idx = match terminalwiki_index::WikiIndex::load(&wiki.name) {
-            Ok(idx) => {
-                index_checked = true;
-                idx
-            }
-            Err(_) => {
-                continue;
-            }
-        };
+    for wiki in target_wikis {
+        let idx = terminalwiki_index::WikiIndex::load(&wiki.name)
+            .map_err(|e| Error::index(format!("Search index for '{}' is unavailable: {e}. Run 'tw index rebuild'.", wiki.name)))?;
 
-        if let Ok(hits) = idx.search(&q) {
-            for hit in hits {
-                any_hits = true;
-                let path_str = hit.relative.to_string_lossy().to_string();
-                let clean_title = if hit.title.is_empty() {
-                    path_str.clone()
-                } else {
-                    hit.title.clone()
+        let hits = idx.search(&q)?;
+
+        for hit in hits {
+            any_hits = true;
+            let path_str = hit.relative.to_string_lossy().to_string();
+            let clean_title = if hit.title.is_empty() {
+                path_str.clone()
+            } else {
+                hit.title.clone()
+            };
+
+            if args.path_only {
+                println!("{}", sanitize_line(&path_str));
+            } else if args.jsonl {
+                let item = SearchResultJsonItem {
+                    wiki: hit.wiki.clone(),
+                    path: path_str,
+                    title: clean_title,
+                    score: hit.score,
+                    snippet: hit.snippet,
                 };
-
-                if args.path_only {
-                    println!("{}", sanitize_line(&path_str));
-                } else if args.jsonl {
-                    let item = SearchResultJsonItem {
-                        wiki: hit.wiki.clone(),
-                        path: path_str,
-                        title: clean_title,
-                        score: hit.score,
-                        snippet: hit.snippet,
-                    };
-                    if let Ok(json_str) = serde_json::to_string(&item) {
-                        println!("{json_str}");
-                    }
-                } else if args.json {
-                    json_results.push(SearchResultJsonItem {
-                        wiki: hit.wiki.clone(),
-                        path: path_str,
-                        title: clean_title,
-                        score: hit.score,
-                        snippet: hit.snippet,
-                    });
-                } else {
-                    println!("{}", sanitize_line(&clean_title));
-                    println!("  {}:{}", sanitize_line(&hit.wiki), sanitize_line(&path_str));
-                    if let Some(ref snippet) = hit.snippet {
-                        println!("  {}", sanitize_line(snippet));
-                    }
-                    println!();
+                if let Ok(json_str) = serde_json::to_string(&item) {
+                    println!("{json_str}");
                 }
+            } else if args.json {
+                json_results.push(SearchResultJsonItem {
+                    wiki: hit.wiki.clone(),
+                    path: path_str,
+                    title: clean_title,
+                    score: hit.score,
+                    snippet: hit.snippet,
+                });
+            } else {
+                println!("{}", sanitize_line(&clean_title));
+                println!("  {}:{}", sanitize_line(&hit.wiki), sanitize_line(&path_str));
+                if let Some(ref snippet) = hit.snippet {
+                    println!("  {}", sanitize_line(snippet));
+                }
+                println!();
             }
-        }
-
-        if !args.all {
-            break; // Default to searching default wiki unless --all
         }
     }
 
@@ -99,18 +105,14 @@ pub fn search(query: String, args: Args, _config: Config, wikis: WikiSet) -> Res
             query: query.clone(),
             results: json_results,
         };
-        if let Ok(json_str) = serde_json::to_string_pretty(&output) {
-            println!("{json_str}");
-        }
+        let json_str = serde_json::to_string_pretty(&output)
+            .map_err(|e| Error::other(format!("JSON serialization error: {e}")))?;
+        println!("{json_str}");
         return Ok(());
     }
 
-    if !any_hits {
-        if !index_checked {
-            eprintln!("No index found. Run 'tw index rebuild' first.");
-        } else {
-            eprintln!("No results found for '{}'.", sanitize_line(&query));
-        }
+    if !any_hits && !args.jsonl && !args.path_only {
+        eprintln!("No results found for '{}'.", sanitize_line(&query));
     }
 
     Ok(())

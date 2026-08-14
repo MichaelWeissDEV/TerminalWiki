@@ -268,8 +268,7 @@ mod tests {
         fs::write(base.join(".git/COMMIT_EDITMSG"), "x").unwrap();
         fs::write(base.join("a.md"), "x").unwrap();
 
-        let mut cfg = IndexConfig::default();
-        cfg.hidden = true; // even when hidden files are explicitly enabled
+        let cfg = IndexConfig { hidden: true, ..Default::default() };
         let files = scan(&open(&base), &cfg);
         assert_eq!(names(&files), vec!["a.md"]);
         fs::remove_dir_all(&base).ok();
@@ -281,8 +280,7 @@ mod tests {
         fs::write(base.join(".terminalwiki.toml"), "title = \"x\"\n").unwrap();
         fs::write(base.join(IGNORE_FILE), "\n").unwrap();
         fs::write(base.join("a.md"), "x").unwrap();
-        let mut cfg = IndexConfig::default();
-        cfg.hidden = true;
+        let cfg = IndexConfig { hidden: true, ..Default::default() };
         let files = scan(&open(&base), &cfg);
         assert_eq!(names(&files), vec!["a.md"]);
         fs::remove_dir_all(&base).ok();
@@ -294,8 +292,7 @@ mod tests {
         fs::write(base.join("big.md"), vec![b'x'; 4096]).unwrap();
         fs::write(base.join("small.md"), "x").unwrap();
 
-        let mut cfg = IndexConfig::default();
-        cfg.max_file_size = 1024;
+        let cfg = IndexConfig { max_file_size: 1024, ..Default::default() };
         let files = scan(&open(&base), &cfg);
         let big = files.iter().find(|f| f.relative.ends_with("big.md")).unwrap();
         assert!(big.too_large, "large file must be flagged");
@@ -310,8 +307,7 @@ mod tests {
         let base = tmpdir("nocode");
         fs::write(base.join("a.md"), "x").unwrap();
         fs::write(base.join("b.rs"), "x").unwrap();
-        let mut cfg = IndexConfig::default();
-        cfg.code = false;
+        let cfg = IndexConfig { code: false, ..Default::default() };
         let files = scan(&open(&base), &cfg);
         assert_eq!(names(&files), vec!["a.md"]);
         fs::remove_dir_all(&base).ok();

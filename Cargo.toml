@@ -5,7 +5,7 @@ edition = "2021"
 rust-version = "1.82"
 description = "A fast, terminal-native knowledge base. The files are the truth."
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/user/terminalwiki"
+repository = "https://github.com/MichaelWeissDEV/TerminalWiki"
 readme = "README.md"
 default-run = "tw"
 

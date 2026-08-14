@@ -6,6 +6,7 @@ use crossterm::event::{
     poll as poll_event, read as read_event, Event, KeyCode, KeyEvent, KeyModifiers,
 };
 use terminalwiki_core::Result;
+use terminalwiki_render::LinkTarget;
 
 use crate::app::{App, Mode};
 
@@ -94,37 +95,52 @@ fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<()> {
             app.go_forward();
         }
         (KeyModifiers::NONE, KeyCode::Tab) => {
-            if !app.extracted_links.is_empty() {
+            if !app.links.is_empty() {
                 let next = app
                     .selected_link_idx
-                    .map(|i| (i + 1) % app.extracted_links.len())
+                    .map(|i| (i + 1) % app.links.len())
                     .unwrap_or(0);
                 app.selected_link_idx = Some(next);
-                let (line_no, ref target) = app.extracted_links[next];
-                app.scroll = line_no.saturating_sub(view_h / 2);
+                let link = &app.links[next];
+                app.scroll = link.line.saturating_sub(view_h / 2);
                 app.status_message = Some(format!(
-                    "Link: [[{target}]] (press Enter to open)"
+                    "Link: {} (press Enter to open)",
+                    link.label
                 ));
             }
         }
         (KeyModifiers::SHIFT, KeyCode::BackTab) => {
-            if !app.extracted_links.is_empty() {
+            if !app.links.is_empty() {
                 let prev = app
                     .selected_link_idx
-                    .map(|i| if i == 0 { app.extracted_links.len() - 1 } else { i - 1 })
+                    .map(|i| if i == 0 { app.links.len() - 1 } else { i - 1 })
                     .unwrap_or(0);
                 app.selected_link_idx = Some(prev);
-                let (line_no, ref target) = app.extracted_links[prev];
-                app.scroll = line_no.saturating_sub(view_h / 2);
+                let link = &app.links[prev];
+                app.scroll = link.line.saturating_sub(view_h / 2);
                 app.status_message = Some(format!(
-                    "Link: [[{target}]] (press Enter to open)"
+                    "Link: {} (press Enter to open)",
+                    link.label
                 ));
             }
         }
         (KeyModifiers::NONE, KeyCode::Enter) => {
             if let Some(idx) = app.selected_link_idx {
-                if let Some((_, target)) = app.extracted_links.get(idx).cloned() {
-                    let _ = app.load_page(&app.current_wiki.clone(), &target, true);
+                if let Some(target) = app.links.get(idx).map(|l| l.target.clone()) {
+                    match target {
+                        LinkTarget::Wiki(target_name) => {
+                            let wiki = app.current_wiki.clone();
+                            let _ = app.load_page(&wiki, &target_name, true);
+                        }
+                        LinkTarget::External(url) => {
+                            app.status_message = Some(format!("External link: {url}"));
+                        }
+                        LinkTarget::File(file) => {
+                            let wiki = app.current_wiki.clone();
+                            let _ = app.load_page(&wiki, &file, true);
+                        }
+                        LinkTarget::Heading(_) => {}
+                    }
                 }
             }
         }
@@ -180,8 +196,8 @@ fn handle_outline_key(app: &mut App, key: KeyEvent) -> Result<()> {
             }
         }
         KeyCode::Enter => {
-            if let Some((_, _, line_idx)) = app.headings.get(app.outline_selected) {
-                app.scroll = *line_idx;
+            if let Some(heading) = app.headings.get(app.outline_selected) {
+                app.scroll = heading.line;
                 app.mode = Mode::Normal;
             }
         }

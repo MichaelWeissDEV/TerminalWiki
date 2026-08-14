@@ -1,11 +1,9 @@
 //! `tw completions SHELL` — generate shell completion scripts (spec §100).
 
+use std::io::{stdout, Write};
 use terminalwiki_core::{Error, Result};
 
-pub fn generate(shell: String) -> Result<()> {
-    match shell.to_ascii_lowercase().as_str() {
-        "bash" => {
-            print!("{}", r#"# Bash completion for TerminalWiki (tw)
+const BASH_COMPLETION: &str = r#"# Bash completion for TerminalWiki (tw)
 _tw_completions() {
     local cur prev subcmds
     cur="${COMP_WORDS[COMP_CWORD]}"
@@ -34,10 +32,9 @@ _tw_completions() {
     esac
 }
 complete -F _tw_completions tw terminalwiki
-"#);
-        }
-        "zsh" => {
-            print!("{}", r#"#compdef tw terminalwiki
+"#;
+
+const ZSH_COMPLETION: &str = r#"#compdef tw terminalwiki
 
 _tw() {
     local -a commands
@@ -85,10 +82,9 @@ _tw() {
 }
 
 _tw "$@"
-"#);
-        }
-        "fish" => {
-            print!("{}", r#"# Fish completion for TerminalWiki (tw)
+"#;
+
+const FISH_COMPLETION: &str = r#"# Fish completion for TerminalWiki (tw)
 complete -c tw -f
 complete -c terminalwiki -f
 
@@ -114,7 +110,21 @@ complete -c tw -n "__fish_use_subcommand" -a stats -d "Wiki statistics"
 complete -c tw -n "__fish_use_subcommand" -a config -d "Show active configuration"
 complete -c tw -n "__fish_use_subcommand" -a completions -d "Generate shell completions"
 complete -c tw -n "__fish_use_subcommand" -a tui -d "Open interactive TUI"
-"#);
+"#;
+
+pub fn generate(shell: String) -> Result<()> {
+    match shell.to_ascii_lowercase().as_str() {
+        "bash" => {
+            stdout().write_all(BASH_COMPLETION.as_bytes())
+                .map_err(|e| Error::other(format!("Write error: {e}")))?;
+        }
+        "zsh" => {
+            stdout().write_all(ZSH_COMPLETION.as_bytes())
+                .map_err(|e| Error::other(format!("Write error: {e}")))?;
+        }
+        "fish" => {
+            stdout().write_all(FISH_COMPLETION.as_bytes())
+                .map_err(|e| Error::other(format!("Write error: {e}")))?;
         }
         _ => {
             return Err(Error::invalid_arguments(format!(

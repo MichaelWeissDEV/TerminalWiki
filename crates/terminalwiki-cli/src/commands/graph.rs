@@ -84,7 +84,7 @@ pub fn graph(
         let start_wiki = args
             .wiki
             .or_else(|| wikis.default_wiki().map(|w| w.name.clone()))
-            .ok_or_else(|| Error::NoWikiConfigured)?;
+            .ok_or(Error::NoWikiConfigured)?;
         let resolution = resolve::resolve(&wikis, &start_wiki, p, &config.index)?;
         g.neighborhood(&resolution.wiki, &resolution.relative, depth)
     } else {

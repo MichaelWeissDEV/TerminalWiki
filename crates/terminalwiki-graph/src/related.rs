@@ -31,7 +31,7 @@ impl WikiGraph {
                 return;
             }
             *scores.entry(idx).or_insert(0.0) += score;
-            reasons.entry(idx).or_insert_with(Vec::new).push(reason.to_string());
+            reasons.entry(idx).or_default().push(reason.to_string());
         };
 
         // direct links: +10

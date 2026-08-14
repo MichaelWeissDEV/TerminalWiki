@@ -20,7 +20,7 @@ TerminalWiki is in **Alpha** (Phase 1 consolidation complete). Core addressing, 
 
 ### Building from Source
 ```bash
-git clone https://github.com/user/terminalwiki.git
+git clone https://github.com/MichaelWeissDEV/TerminalWiki.git
 cd terminalwiki
 cargo build --release
 ```

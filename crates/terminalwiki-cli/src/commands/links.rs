@@ -1,12 +1,54 @@
-//! `tw links PAGE`, `tw backlinks PAGE`, `tw related PAGE` (spec §16, §17).
+//! `tw links / backlinks / related PAGE` (spec §16, §17, §33).
 
+use serde::Serialize;
+use terminalwiki_core::config::Config;
+use terminalwiki_core::error::{Error, Result};
 use terminalwiki_core::resolve;
 use terminalwiki_core::sanitize::sanitize_line;
 use terminalwiki_core::wiki::WikiSet;
-use terminalwiki_core::{Config, Error, Result};
 use terminalwiki_graph::{GraphEntry, WikiGraph};
 
 use crate::args::Args;
+
+#[derive(Serialize)]
+struct BacklinksJsonOutput {
+    page: String,
+    backlinks: Vec<BacklinkJsonItem>,
+}
+
+#[derive(Serialize)]
+struct BacklinkJsonItem {
+    wiki: String,
+    from: String,
+    title: String,
+}
+
+#[derive(Serialize)]
+struct OutgoingLinksJsonOutput {
+    page: String,
+    links: Vec<OutgoingLinkJsonItem>,
+}
+
+#[derive(Serialize)]
+struct OutgoingLinkJsonItem {
+    target: String,
+    broken: bool,
+}
+
+#[derive(Serialize)]
+struct RelatedJsonOutput {
+    page: String,
+    related: Vec<RelatedJsonItem>,
+}
+
+#[derive(Serialize)]
+struct RelatedJsonItem {
+    wiki: String,
+    page: String,
+    title: String,
+    score: f32,
+    reasons: Vec<String>,
+}
 
 fn build_graph(wikis: &WikiSet, config: &Config) -> WikiGraph {
     let mut entries = Vec::new();
@@ -28,25 +70,18 @@ fn build_graph(wikis: &WikiSet, config: &Config) -> WikiGraph {
             let files = terminalwiki_core::scan::scan(wiki, &config.index);
             for f in files {
                 let content_type = f.content_type.as_str().to_string();
-                let title = f.relative.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-                let mut wiki_links = Vec::new();
-                if f.content_type == terminalwiki_core::filetype::ContentType::Markdown {
-                    if let Ok((bytes, _)) = terminalwiki_core::scan::read_limited(&f.path, 1024 * 1024) {
-                        let text = String::from_utf8_lossy(&bytes);
-                        for (_range, link) in terminalwiki_core::link::find_links(&text) {
-                            if let terminalwiki_core::link::LinkTarget::Page { name, .. } = link.target {
-                                wiki_links.push(name);
-                            }
-                        }
-                    }
-                }
+                let title = f
+                    .relative
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_default();
                 entries.push(GraphEntry {
                     wiki: wiki.name.clone(),
                     relative: f.relative,
                     content_type,
                     title,
                     tags: Vec::new(),
-                    wiki_links,
+                    wiki_links: Vec::new(),
                     image_links: Vec::new(),
                 });
             }
@@ -64,7 +99,7 @@ pub fn backlinks(page: String, args: Args, config: Config, wikis: WikiSet) -> Re
     let start_wiki = args
         .wiki
         .or_else(|| wikis.default_wiki().map(|w| w.name.clone()))
-        .ok_or_else(|| Error::NoWikiConfigured)?;
+        .ok_or(Error::NoWikiConfigured)?;
 
     let resolution = resolve::resolve(&wikis, &start_wiki, &page, &config.index)?;
     let graph = build_graph(&wikis, &config);
@@ -72,20 +107,20 @@ pub fn backlinks(page: String, args: Args, config: Config, wikis: WikiSet) -> Re
     let links = graph.backlinks(&resolution.wiki, &resolution.relative);
 
     if args.json {
-        println!(
-            "{{\"page\":\"{}\",\"backlinks\":[{}]}}",
-            sanitize_line(&resolution.relative.to_string_lossy()),
-            links
-                .iter()
-                .map(|b| format!(
-                    "{{\"wiki\":\"{}\",\"from\":\"{}\",\"title\":\"{}\"}}",
-                    sanitize_line(&b.from_wiki),
-                    sanitize_line(&b.from_relative.to_string_lossy()),
-                    sanitize_line(&b.from_title)
-                ))
-                .collect::<Vec<_>>()
-                .join(",")
-        );
+        let output = BacklinksJsonOutput {
+            page: resolution.relative.to_string_lossy().to_string(),
+            backlinks: links
+                .into_iter()
+                .map(|b| BacklinkJsonItem {
+                    wiki: b.from_wiki,
+                    from: b.from_relative.to_string_lossy().to_string(),
+                    title: b.from_title,
+                })
+                .collect(),
+        };
+        let json_str = serde_json::to_string_pretty(&output)
+            .map_err(|e| Error::other(format!("JSON error: {e}")))?;
+        println!("{json_str}");
     } else if links.is_empty() {
         println!("No backlinks found for '{}'.", sanitize_line(&page));
     } else {
@@ -115,7 +150,7 @@ pub fn links(page: String, args: Args, config: Config, wikis: WikiSet) -> Result
     let start_wiki = args
         .wiki
         .or_else(|| wikis.default_wiki().map(|w| w.name.clone()))
-        .ok_or_else(|| Error::NoWikiConfigured)?;
+        .ok_or(Error::NoWikiConfigured)?;
 
     let resolution = resolve::resolve(&wikis, &start_wiki, &page, &config.index)?;
     let graph = build_graph(&wikis, &config);
@@ -123,19 +158,19 @@ pub fn links(page: String, args: Args, config: Config, wikis: WikiSet) -> Result
     let edges = graph.outgoing_links(&resolution.wiki, &resolution.relative);
 
     if args.json {
-        println!(
-            "{{\"page\":\"{}\",\"links\":[{}]}}",
-            sanitize_line(&resolution.relative.to_string_lossy()),
-            edges
-                .iter()
-                .map(|e| format!(
-                    "{{\"target\":\"{}\",\"broken\":{}}}",
-                    sanitize_line(&e.target),
-                    e.broken
-                ))
-                .collect::<Vec<_>>()
-                .join(",")
-        );
+        let output = OutgoingLinksJsonOutput {
+            page: resolution.relative.to_string_lossy().to_string(),
+            links: edges
+                .into_iter()
+                .map(|e| OutgoingLinkJsonItem {
+                    target: e.target.clone(),
+                    broken: e.broken,
+                })
+                .collect(),
+        };
+        let json_str = serde_json::to_string_pretty(&output)
+            .map_err(|e| Error::other(format!("JSON error: {e}")))?;
+        println!("{json_str}");
     } else if edges.is_empty() {
         println!("No outgoing links found in '{}'.", sanitize_line(&page));
     } else {
@@ -161,7 +196,7 @@ pub fn related(page: String, args: Args, config: Config, wikis: WikiSet) -> Resu
     let start_wiki = args
         .wiki
         .or_else(|| wikis.default_wiki().map(|w| w.name.clone()))
-        .ok_or_else(|| Error::NoWikiConfigured)?;
+        .ok_or(Error::NoWikiConfigured)?;
 
     let resolution = resolve::resolve(&wikis, &start_wiki, &page, &config.index)?;
     let graph = build_graph(&wikis, &config);
@@ -169,21 +204,22 @@ pub fn related(page: String, args: Args, config: Config, wikis: WikiSet) -> Resu
     let related_pages = graph.related(&resolution.wiki, &resolution.relative, 10);
 
     if args.json {
-        println!(
-            "{{\"page\":\"{}\",\"related\":[{}]}}",
-            sanitize_line(&resolution.relative.to_string_lossy()),
-            related_pages
-                .iter()
-                .map(|r| format!(
-                    "{{\"wiki\":\"{}\",\"path\":\"{}\",\"title\":\"{}\",\"score\":{:.1}}}",
-                    sanitize_line(&r.wiki),
-                    sanitize_line(&r.relative.to_string_lossy()),
-                    sanitize_line(&r.title),
-                    r.score
-                ))
-                .collect::<Vec<_>>()
-                .join(",")
-        );
+        let output = RelatedJsonOutput {
+            page: resolution.relative.to_string_lossy().to_string(),
+            related: related_pages
+                .into_iter()
+                .map(|r| RelatedJsonItem {
+                    wiki: r.wiki,
+                    page: r.relative.to_string_lossy().to_string(),
+                    title: r.title,
+                    score: r.score,
+                    reasons: r.reasons,
+                })
+                .collect(),
+        };
+        let json_str = serde_json::to_string_pretty(&output)
+            .map_err(|e| Error::other(format!("JSON error: {e}")))?;
+        println!("{json_str}");
     } else if related_pages.is_empty() {
         println!("No related pages found for '{}'.", sanitize_line(&page));
     } else {
@@ -192,12 +228,17 @@ pub fn related(page: String, args: Args, config: Config, wikis: WikiSet) -> Resu
             sanitize_line(&resolution.relative.to_string_lossy())
         );
         for r in related_pages {
+            let reasons_str = if r.reasons.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", r.reasons.join(", "))
+            };
             println!(
-                "  {}:{} — {} (score: {:.1})",
+                "  {}:{} · score {:.1}{}",
                 sanitize_line(&r.wiki),
                 sanitize_line(&r.relative.to_string_lossy()),
-                sanitize_line(&r.title),
-                r.score
+                r.score,
+                reasons_str
             );
         }
     }

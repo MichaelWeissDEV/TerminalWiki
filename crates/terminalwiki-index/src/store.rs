@@ -1,29 +1,44 @@
-//! Persistent index storage handling entries.jsonl and Tantivy sync (spec §15, §16).
+//! Compact persistent metadata store in state.json (spec §15, §16, §21, §22).
 
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 
+use serde::{Deserialize, Serialize};
 use terminalwiki_core::error::{Error, Result};
 
 use crate::entry::IndexEntry;
-use crate::tantivy_store::TantivyStore;
+use crate::tantivy_store::{TantivyStore, INDEX_SCHEMA_VERSION};
+
+/// Persistent state container stored in `state.json`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexState {
+    pub schema_version: u32,
+    pub built_at: u64,
+    pub document_count: usize,
+    pub entries: Vec<IndexEntry>,
+}
 
 pub fn save_index(index_dir: &Path, entries: &[IndexEntry]) -> Result<()> {
     if !index_dir.exists() {
         fs::create_dir_all(index_dir).map_err(|e| Error::io(index_dir, e))?;
     }
 
-    let entries_path = index_dir.join("entries.jsonl");
+    let state = IndexState {
+        schema_version: INDEX_SCHEMA_VERSION,
+        built_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+        document_count: entries.len(),
+        entries: entries.to_vec(),
+    };
 
-    let mut file = File::create(&entries_path).map_err(|e| Error::io(&entries_path, e))?;
+    let state_path = index_dir.join("state.json");
+    let state_file = File::create(&state_path).map_err(|e| Error::io(&state_path, e))?;
+    serde_json::to_writer(state_file, &state)
+        .map_err(|e| Error::index(format!("Failed to serialize state.json: {e}")))?;
 
-    for entry in entries {
-        let json = serde_json::to_string(entry).map_err(|e| Error::index(e.to_string()))?;
-        writeln!(file, "{}", json).map_err(|e| Error::io(&entries_path, e))?;
-    }
-
-    // Sync Tantivy Store
+    // Sync Tantivy in its isolated `index_dir/tantivy` directory
     let mut tantivy_store = TantivyStore::open_or_create(index_dir)?;
     tantivy_store.update_entries(index_dir, entries)?;
 
@@ -31,23 +46,37 @@ pub fn save_index(index_dir: &Path, entries: &[IndexEntry]) -> Result<()> {
 }
 
 pub fn load_index(index_dir: &Path) -> Result<Option<Vec<IndexEntry>>> {
-    let meta_path = index_dir.join("meta.json");
-    let entries_path = index_dir.join("entries.jsonl");
+    let state_path = index_dir.join("state.json");
 
-    if !meta_path.exists() || !entries_path.exists() {
+    if !state_path.exists() {
         return Ok(None);
     }
 
-    let file = File::open(&entries_path).map_err(|e| Error::io(&entries_path, e))?;
-    let reader = BufReader::new(file);
-    let mut entries = Vec::new();
+    let file = File::open(&state_path).map_err(|e| Error::io(&state_path, e))?;
+    let state: IndexState = match serde_json::from_reader(file) {
+        Ok(s) => s,
+        Err(_) => return Ok(None),
+    };
 
-    for line in reader.lines() {
-        let line = line.map_err(|e| Error::io(&entries_path, e))?;
-        if let Ok(entry) = serde_json::from_str::<IndexEntry>(&line) {
-            entries.push(entry);
-        }
+    if state.schema_version != INDEX_SCHEMA_VERSION {
+        return Ok(None);
     }
 
-    Ok(Some(entries))
+    Ok(Some(state.entries))
+}
+
+pub fn load_meta(index_dir: &Path) -> Result<Option<IndexState>> {
+    let state_path = index_dir.join("state.json");
+
+    if !state_path.exists() {
+        return Ok(None);
+    }
+
+    let file = File::open(&state_path).map_err(|e| Error::io(&state_path, e))?;
+    let state: IndexState = match serde_json::from_reader(file) {
+        Ok(s) => s,
+        Err(_) => return Ok(None),
+    };
+
+    Ok(Some(state))
 }
