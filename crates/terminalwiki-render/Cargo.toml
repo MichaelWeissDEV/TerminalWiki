@@ -1,0 +1,12 @@
+[package]
+name = "terminalwiki-render"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+terminalwiki-core = { workspace = true }
+pulldown-cmark = { workspace = true }
+unicode-width = { workspace = true }
+unicode-segmentation = { workspace = true }

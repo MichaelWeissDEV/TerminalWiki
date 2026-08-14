@@ -1,0 +1,15 @@
+[package]
+name = "terminalwiki-tui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "TerminalWiki interactive TUI interface"
+
+[dependencies]
+terminalwiki-core = { workspace = true }
+terminalwiki-index = { workspace = true }
+terminalwiki-render = { workspace = true }
+terminalwiki-graph = { workspace = true }
+crossterm = { workspace = true }
+unicode-width = { workspace = true }

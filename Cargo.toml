@@ -1,0 +1,73 @@
+[package]
+name = "terminalwiki"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+description = "A fast, terminal-native knowledge base. The files are the truth."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/user/terminalwiki"
+readme = "README.md"
+default-run = "tw"
+
+[[bin]]
+name = "tw"
+path = "src/bin/tw.rs"
+
+[[bin]]
+name = "terminalwiki"
+path = "src/bin/terminalwiki.rs"
+
+[dependencies]
+terminalwiki-cli = { path = "crates/terminalwiki-cli", version = "0.1.0" }
+
+[features]
+default = []
+
+[workspace]
+members = [
+    "crates/terminalwiki-core",
+    "crates/terminalwiki-index",
+    "crates/terminalwiki-render",
+    "crates/terminalwiki-graph",
+    "crates/terminalwiki-tui",
+    "crates/terminalwiki-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+terminalwiki-core = { path = "crates/terminalwiki-core", version = "0.1.0" }
+terminalwiki-index = { path = "crates/terminalwiki-index", version = "0.1.0" }
+terminalwiki-render = { path = "crates/terminalwiki-render", version = "0.1.0" }
+terminalwiki-graph = { path = "crates/terminalwiki-graph", version = "0.1.0" }
+terminalwiki-tui = { path = "crates/terminalwiki-tui", version = "0.1.0" }
+
+blake3 = "1.8"
+crossterm = "0.28"
+crossbeam-channel = "0.5"
+ignore = "0.4"
+# `html` (default) pulls pulldown-cmark-escape for an HTML renderer a terminal
+# tool never calls, and `simd` only accelerates that renderer. Both are dead
+# weight for startup time and binary size (spec §68, §112).
+pulldown-cmark = { version = "0.13", default-features = false }
+rayon = "1.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"
+unicode-segmentation = "1.13"
+unicode-width = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "unwind"
+strip = "debuginfo"
+
+[profile.bench]
+inherits = "release"
+debug = true
