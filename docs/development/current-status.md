@@ -114,13 +114,22 @@ as root, which would make the permission test vacuous.
 on disk-full, permission, or corruption errors. It now returns
 `Result`, reporting both the open failure and the subsequent create failure.
 
-This was the **only** `expect()` on a Tantivy open/create/writer path.
+A census of the whole `terminalwiki-index` crate's production code (excluding
+`#[cfg(test)]` modules) for `unwrap()` / `expect()` / `panic!` / `todo!` /
+`unimplemented!` found exactly one other hit: `search.rs` sorted results with
+`partial_cmp(...).unwrap()`, which panics on a NaN score inside a user-facing
+search path. Changed to `total_cmp`. **The index crate's production code now
+contains none of those constructs.** The equivalent census for the other crates
+has not yet been done — that is Gate 28 and remains open.
 
 ### Gate 2.4 — Search read-only
 
-`test_search_is_strictly_read_only` (builds an index, records `state.json`,
-performs repeated searches, asserts the file is byte-identical afterwards) was
-already present and passing. Verified, not modified.
+A read-only test already existed, but it ran only **5** searches and compared
+only `state.json` — it could not have detected a rebuilt Tantivy segment.
+Strengthened to the spec's actual requirement: **100** searches, plus a snapshot
+of every file under the index directory (relative path, length, mtime) taken
+before and after and compared. Segment creation, deletion, or rewriting now fails
+the test.
 
 ### Wiki links — real product bug
 
