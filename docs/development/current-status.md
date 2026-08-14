@@ -158,9 +158,17 @@ the renderer did not. This affected the CLI and the TUI alike, since both reach
 markdown through this one entry point.
 
 Fixed by stripping at `render_markdown` using the same `body_offset` the indexer
-uses, so display and index agree on where the body begins. Tests cover the
-stripped case, the no-frontmatter case, and a mid-document `---` rule (which is
-content and must survive).
+uses, so display and index agree on where the body begins.
+
+The strip is deliberately **not** applied to `ContentType::Text`. The indexer
+does not parse frontmatter for plain text, so stripping there would make display
+and index disagree and would silently hide everything between a leading `---` and
+the next one in a `.txt` file. `render_path` therefore routes Markdown through
+`render_markdown` and Text through the new `render_markdown_raw`, which
+`tw render` also uses.
+
+Tests cover: the stripped case, the no-frontmatter case, a mid-document `---`
+rule (content, must survive), and the same bytes rendered as `.md` versus `.txt`.
 
 ### Gate 1 — Version coherence
 
