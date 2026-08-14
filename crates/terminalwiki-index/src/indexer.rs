@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use ignore::WalkBuilder;
@@ -14,7 +15,9 @@ use terminalwiki_core::link::find_links;
 use terminalwiki_core::sanitize::sanitize_text;
 use terminalwiki_core::wiki::Wiki;
 
-use crate::entry::{document_id, ContentTypeHelper, DocumentState, IndexDelta, IndexEntry};
+use crate::entry::{
+    document_id, ContentTypeHelper, DocumentState, IndexDelta, IndexEntry, SkipReason, SkippedFile,
+};
 
 fn hash_content(content: &[u8]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
@@ -206,13 +209,30 @@ pub fn build_all(wiki: &Wiki, config: &Config) -> Result<Vec<IndexEntry>> {
 
     let mut entries = Vec::new();
     for res in results {
-        if let Some(entry) = res? {
-            entries.push(entry);
+        match res {
+            Ok(Some(entry)) => entries.push(entry),
+            Ok(None) => {}
+            // A file removed between the scan and the read simply falls out of
+            // this build; it must not abort the whole rebuild (spec Gate 2.2).
+            Err(e) if classify_io(&e) == Some(SkipReason::Vanished) => {}
+            Err(e) => return Err(e),
         }
     }
 
     entries.sort_by(|a, b| a.relative.cmp(&b.relative));
     Ok(entries)
+}
+
+/// Classifies an indexing error as a per-file skip, or `None` if it is a real
+/// failure that must abort the whole pass (e.g. a path outside the wiki root).
+fn classify_io(e: &Error) -> Option<SkipReason> {
+    match e {
+        Error::Io { source, .. } => match source.kind() {
+            io::ErrorKind::NotFound => Some(SkipReason::Vanished),
+            _ => Some(SkipReason::Unreadable(source.to_string())),
+        },
+        _ => None,
+    }
 }
 
 /// Computes an incremental delta between on-disk files and previous state (spec §13, §16).
@@ -261,9 +281,35 @@ pub fn compute_delta(
                 continue;
             }
 
-            // 2. Hash check (spec §16)
+            // 2. Hash check (spec §16).
+            //
+            // An unreadable file must never be hashed as if it were empty: that
+            // would silently replace the indexed document with a 0-byte one.
             let content = if size <= max_size {
-                fs::read(&path).unwrap_or_default()
+                match fs::read(&path) {
+                    Ok(content) => content,
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                        // Scan and read are not atomic. Another process removed
+                        // the file in between; drop it from this delta entirely
+                        // so the next pass observes it as a normal deletion.
+                        seen_paths.remove(&rel);
+                        delta.skipped.push(SkippedFile {
+                            relative: rel,
+                            reason: SkipReason::Vanished,
+                        });
+                        continue;
+                    }
+                    Err(e) => {
+                        // Permission denied, I/O error, broken symlink: keep the
+                        // previously indexed content and report the file.
+                        delta.unchanged.push((*prev).clone());
+                        delta.skipped.push(SkippedFile {
+                            relative: rel,
+                            reason: SkipReason::Unreadable(e.to_string()),
+                        });
+                        continue;
+                    }
+                }
             } else {
                 Vec::new()
             };
@@ -279,13 +325,46 @@ pub fn compute_delta(
             }
 
             // Content modified -> parse
-            if let Some(entry) = parse_file(&wiki.name, &wiki.root, &path, max_size)? {
-                delta.modified.push(entry);
+            match parse_file(&wiki.name, &wiki.root, &path, max_size) {
+                Ok(Some(entry)) => delta.modified.push(entry),
+                Ok(None) => {}
+                Err(e) => match classify_io(&e) {
+                    Some(SkipReason::Vanished) => {
+                        seen_paths.remove(&rel);
+                        delta.skipped.push(SkippedFile {
+                            relative: rel,
+                            reason: SkipReason::Vanished,
+                        });
+                    }
+                    Some(reason) => {
+                        // Retain the previous entry rather than dropping the page.
+                        delta.unchanged.push((*prev).clone());
+                        delta.skipped.push(SkippedFile {
+                            relative: rel,
+                            reason,
+                        });
+                    }
+                    None => return Err(e),
+                },
             }
         } else {
             // New file -> parse
-            if let Some(entry) = parse_file(&wiki.name, &wiki.root, &path, max_size)? {
-                delta.added.push(entry);
+            match parse_file(&wiki.name, &wiki.root, &path, max_size) {
+                Ok(Some(entry)) => delta.added.push(entry),
+                Ok(None) => {}
+                Err(e) => match classify_io(&e) {
+                    Some(reason) => {
+                        // Never indexed before, so there is nothing to retain.
+                        if reason == SkipReason::Vanished {
+                            seen_paths.remove(&rel);
+                        }
+                        delta.skipped.push(SkippedFile {
+                            relative: rel,
+                            reason,
+                        });
+                    }
+                    None => return Err(e),
+                },
             }
         }
     }
@@ -315,4 +394,124 @@ fn scan_wiki_paths(root: &Path) -> Vec<PathBuf> {
         }
     }
     paths
+}
+
+#[cfg(test)]
+mod io_resilience_tests {
+    use super::*;
+    use terminalwiki_core::config::WikiEntry;
+
+    /// Builds a wiki with a single page and returns (tempdir, wiki, config).
+    fn fixture() -> (tempfile::TempDir, Wiki, Config) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path().join("wiki");
+        fs::create_dir_all(&root).expect("create wiki root");
+        fs::write(root.join("Page.md"), "# Page\nOriginal content.\n").expect("write page");
+
+        let entry = WikiEntry {
+            name: "w".to_string(),
+            path: root,
+            mounts: Vec::new(),
+        };
+        let wiki = Wiki::open(&entry).expect("open wiki");
+        (tmp, wiki, Config::default())
+    }
+
+    /// An unreadable file must keep its indexed content and be reported —
+    /// never be hashed as if it were 0 bytes (spec Gate 2.1).
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_file_is_reported_and_retains_previous_content() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_tmp, wiki, config) = fixture();
+        let page = wiki.root.join("Page.md");
+
+        let initial = build_all(&wiki, &config).expect("initial build");
+        let states: Vec<DocumentState> = initial.into_iter().map(|e| e.to_state()).collect();
+        assert_eq!(states.len(), 1);
+        let original_hash = states[0].content_hash;
+
+        // Change size+mtime so the fast path cannot short-circuit, then make it
+        // unreadable so the content read fails with PermissionDenied.
+        fs::write(&page, "# Page\nRewritten, longer content here.\n").expect("rewrite");
+        fs::set_permissions(&page, fs::Permissions::from_mode(0o000)).expect("chmod");
+
+        let delta = compute_delta(&wiki, &config, &states).expect("delta must not abort");
+
+        // Restore permissions before any assertion can abort the test.
+        let _ = fs::set_permissions(&page, fs::Permissions::from_mode(0o644));
+
+        assert_eq!(delta.skipped.len(), 1, "unreadable file must be reported");
+        assert!(
+            matches!(delta.skipped[0].reason, SkipReason::Unreadable(_)),
+            "expected Unreadable, got {:?}",
+            delta.skipped[0].reason
+        );
+        assert!(
+            delta.deleted_doc_ids.is_empty(),
+            "an unreadable file must not be deleted from the index"
+        );
+        assert_eq!(
+            delta.unchanged.len(),
+            1,
+            "previously indexed content must be retained"
+        );
+        assert_eq!(
+            delta.unchanged[0].content_hash, original_hash,
+            "retained entry must keep its original hash, not the hash of empty content"
+        );
+        assert!(delta.modified.is_empty());
+    }
+
+    /// Root can read anything, which would make the permission test vacuous.
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_test_is_meaningful_for_this_user() {
+        assert_ne!(
+            unsafe { libc_geteuid() },
+            0,
+            "running as root makes the permission-denied test vacuous"
+        );
+    }
+
+    #[cfg(unix)]
+    unsafe fn libc_geteuid() -> u32 {
+        extern "C" {
+            fn geteuid() -> u32;
+        }
+        geteuid()
+    }
+
+    /// A file removed between scan and read must fall out of the delta cleanly
+    /// rather than crashing or being indexed as empty (spec Gate 2.2).
+    #[test]
+    fn vanished_file_falls_out_of_delta() {
+        let (_tmp, wiki, config) = fixture();
+
+        // A path that the scan will not find at all: simulate the race by
+        // computing a delta whose previous state references a now-absent file.
+        let missing = DocumentState {
+            document_id: document_id("w", Path::new("Gone.md")),
+            wiki: "w".to_string(),
+            path: wiki.root.join("Gone.md"),
+            relative: PathBuf::from("Gone.md"),
+            size: 10,
+            mtime: 0,
+            content_hash: [0u8; 32],
+            content_type: ContentTypeHelper::Markdown,
+            title: "Gone".to_string(),
+            aliases: Vec::new(),
+            tags: Vec::new(),
+            headings: Vec::new(),
+            wiki_links: Vec::new(),
+        };
+
+        let delta = compute_delta(&wiki, &config, &[missing]).expect("delta must not abort");
+        assert_eq!(
+            delta.deleted_doc_ids.len(),
+            1,
+            "a file absent from disk must be deleted from the index"
+        );
+    }
 }

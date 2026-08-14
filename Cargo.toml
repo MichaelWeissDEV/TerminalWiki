@@ -1,6 +1,6 @@
 [package]
 name = "terminalwiki"
-version = "0.1.0"
+version = "0.1.0-alpha"
 edition = "2021"
 rust-version = "1.82"
 description = "A fast, terminal-native knowledge base. The files are the truth."
@@ -26,7 +26,7 @@ name = "benchmark_suite"
 harness = false
 
 [dependencies]
-terminalwiki-cli = { path = "crates/terminalwiki-cli", version = "0.1.0" }
+terminalwiki-cli = { path = "crates/terminalwiki-cli", version = "0.1.0-alpha" }
 
 [dev-dependencies]
 terminalwiki-core = { path = "crates/terminalwiki-core" }
@@ -49,17 +49,17 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.0-alpha"
 edition = "2021"
 rust-version = "1.82"
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
-terminalwiki-core = { path = "crates/terminalwiki-core", version = "0.1.0" }
-terminalwiki-index = { path = "crates/terminalwiki-index", version = "0.1.0" }
-terminalwiki-render = { path = "crates/terminalwiki-render", version = "0.1.0" }
-terminalwiki-graph = { path = "crates/terminalwiki-graph", version = "0.1.0" }
-terminalwiki-tui = { path = "crates/terminalwiki-tui", version = "0.1.0" }
+terminalwiki-core = { path = "crates/terminalwiki-core", version = "0.1.0-alpha" }
+terminalwiki-index = { path = "crates/terminalwiki-index", version = "0.1.0-alpha" }
+terminalwiki-render = { path = "crates/terminalwiki-render", version = "0.1.0-alpha" }
+terminalwiki-graph = { path = "crates/terminalwiki-graph", version = "0.1.0-alpha" }
+terminalwiki-tui = { path = "crates/terminalwiki-tui", version = "0.1.0-alpha" }
 
 blake3 = "1.8"
 crossterm = "0.28"

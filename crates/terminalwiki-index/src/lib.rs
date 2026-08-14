@@ -17,7 +17,7 @@ use terminalwiki_core::paths;
 use terminalwiki_core::wiki::Wiki;
 
 pub use backlinks::BacklinkResult;
-pub use entry::{document_id, DocumentState, IndexDelta, IndexEntry};
+pub use entry::{document_id, DocumentState, IndexDelta, IndexEntry, SkipReason, SkippedFile};
 pub use fuzzy::{FuzzyDataset, FuzzyHit, FuzzyItem};
 pub use query::{Query, QueryTerm};
 pub use store::IndexState;
@@ -27,6 +27,9 @@ pub use tantivy_store::{IndexMeta, SearchHit, TantivyStore, INDEX_SCHEMA_VERSION
 pub struct WikiIndex {
     pub wiki_name: String,
     pub entries: Vec<DocumentState>,
+    /// Files seen during this pass that could not be indexed. Callers are
+    /// expected to report these; an empty vec means every file was readable.
+    pub skipped: Vec<SkippedFile>,
 }
 
 impl WikiIndex {
@@ -40,6 +43,7 @@ impl WikiIndex {
         Ok(WikiIndex {
             wiki_name: wiki_name.to_string(),
             entries,
+            skipped: Vec::new(),
         })
     }
 
@@ -63,6 +67,7 @@ impl WikiIndex {
         Ok(WikiIndex {
             wiki_name: wiki.name.clone(),
             entries: states,
+            skipped: Vec::new(),
         })
     }
 
@@ -75,6 +80,7 @@ impl WikiIndex {
 
         let existing = store::load_index(&dir)?.unwrap_or_default();
         let delta = indexer::compute_delta(wiki, config, &existing)?;
+        let skipped = delta.skipped.clone();
 
         // Apply delta to Tantivy
         let mut tantivy_store = TantivyStore::open_or_create(&dir)?;
@@ -95,6 +101,7 @@ impl WikiIndex {
         Ok(WikiIndex {
             wiki_name: wiki.name.clone(),
             entries: new_states,
+            skipped,
         })
     }
 

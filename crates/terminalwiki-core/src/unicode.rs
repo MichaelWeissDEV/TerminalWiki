@@ -71,7 +71,10 @@ mod tests {
     #[test]
     fn truncates_without_breaking_graphemes() {
         assert_eq!(truncate_display_width("hello world", 6), "hello…");
-        assert_eq!(truncate_display_width("漢字テスト", 5), "漢…");
+        // 漢(2) + 字(2) + …(1) == 5 columns: fills the budget without exceeding it.
+        assert_eq!(truncate_display_width("漢字テスト", 5), "漢字…");
+        // An odd budget cannot be filled exactly by wide graphemes: 漢(2) + …(1) = 3.
+        assert_eq!(truncate_display_width("漢字テスト", 4), "漢…");
         assert_eq!(truncate_display_width("short", 10), "short");
     }
 

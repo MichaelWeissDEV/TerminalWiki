@@ -23,7 +23,7 @@ pub fn main() -> std::process::ExitCode {
         return ExitCode::Success.into();
     }
     if args.version {
-        println!("terminalwiki 0.1.0");
+        println!("terminalwiki {}", env!("CARGO_PKG_VERSION"));
         return ExitCode::Success.into();
     }
 
@@ -51,7 +51,7 @@ pub fn main() -> std::process::ExitCode {
 }
 
 fn print_help() {
-    println!("terminalwiki 0.1.0");
+    println!("terminalwiki {}", env!("CARGO_PKG_VERSION"));
     println!("A fast, terminal-native knowledge base.\n");
     println!("USAGE");
     println!("  tw [OPTIONS] [WIKI] [PAGE]");

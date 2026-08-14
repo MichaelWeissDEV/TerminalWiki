@@ -77,6 +77,42 @@ pub struct IndexDelta {
     pub modified: Vec<IndexEntry>,
     pub deleted_doc_ids: Vec<String>,
     pub unchanged: Vec<DocumentState>,
+    /// Files encountered during the scan that could not be indexed this pass.
+    ///
+    /// These are reported rather than silently treated as empty: one unreadable
+    /// file must not corrupt its index entry, nor abort the whole update.
+    pub skipped: Vec<SkippedFile>,
+}
+
+/// A file that the indexer saw but could not read, with the reason why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkippedFile {
+    pub relative: PathBuf,
+    pub reason: SkipReason,
+}
+
+/// Why a file was skipped during an index pass.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SkipReason {
+    /// Deleted between the directory scan and the read. Benign: the file is
+    /// simply absent from this delta and the next pass sees it as deleted.
+    Vanished,
+    /// Could not be read — permissions, an I/O failure, or a broken symlink.
+    /// The previously indexed content is retained.
+    Unreadable(String),
+}
+
+impl std::fmt::Display for SkippedFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.reason {
+            SkipReason::Vanished => {
+                write!(f, "{}: removed during scan", self.relative.display())
+            }
+            SkipReason::Unreadable(msg) => {
+                write!(f, "{}: {msg}", self.relative.display())
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

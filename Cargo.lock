@@ -1354,7 +1354,7 @@ dependencies = [
 
 [[package]]
 name = "terminalwiki"
-version = "0.1.0"
+version = "0.1.0-alpha"
 dependencies = [
  "tempfile",
  "terminalwiki-cli",
@@ -1366,7 +1366,7 @@ dependencies = [
 
 [[package]]
 name = "terminalwiki-cli"
-version = "0.1.0"
+version = "0.1.0-alpha"
 dependencies = [
  "serde",
  "serde_json",
@@ -1380,7 +1380,7 @@ dependencies = [
 
 [[package]]
 name = "terminalwiki-core"
-version = "0.1.0"
+version = "0.1.0-alpha"
 dependencies = [
  "blake3",
  "crossbeam-channel",
@@ -1394,7 +1394,7 @@ dependencies = [
 
 [[package]]
 name = "terminalwiki-graph"
-version = "0.1.0"
+version = "0.1.0-alpha"
 dependencies = [
  "serde",
  "terminalwiki-core",
@@ -1403,7 +1403,7 @@ dependencies = [
 
 [[package]]
 name = "terminalwiki-index"
-version = "0.1.0"
+version = "0.1.0-alpha"
 dependencies = [
  "blake3",
  "ignore",
@@ -1414,13 +1414,14 @@ dependencies = [
  "serde",
  "serde_json",
  "tantivy",
+ "tempfile",
  "terminalwiki-core",
  "unicode-segmentation",
 ]
 
 [[package]]
 name = "terminalwiki-render"
-version = "0.1.0"
+version = "0.1.0-alpha"
 dependencies = [
  "once_cell",
  "pulldown-cmark",
@@ -1432,7 +1433,7 @@ dependencies = [
 
 [[package]]
 name = "terminalwiki-tui"
-version = "0.1.0"
+version = "0.1.0-alpha"
 dependencies = [
  "crossterm",
  "terminalwiki-core",

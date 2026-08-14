@@ -54,8 +54,32 @@ fn update(config: Config, wikis: WikiSet) -> Result<()> {
             idx.entries.len(),
             t.elapsed().as_secs_f32()
         );
+        report_skipped(&idx);
     }
     Ok(())
+}
+
+/// Reports files that could not be indexed. A file that vanished mid-scan is
+/// benign and only worth a count; an unreadable file means its indexed content
+/// is now stale, so each one is named.
+fn report_skipped(idx: &terminalwiki_index::WikiIndex) {
+    use terminalwiki_core::sanitize::sanitize_line;
+    use terminalwiki_index::SkipReason;
+
+    let mut vanished = 0usize;
+    for skip in &idx.skipped {
+        match &skip.reason {
+            SkipReason::Vanished => vanished += 1,
+            SkipReason::Unreadable(msg) => eprintln!(
+                "  warning: could not read {}: {} (keeping previously indexed content)",
+                sanitize_line(&skip.relative.to_string_lossy()),
+                sanitize_line(msg)
+            ),
+        }
+    }
+    if vanished > 0 {
+        eprintln!("  note: {vanished} file(s) removed during scan");
+    }
 }
 
 fn rebuild(config: Config, wikis: WikiSet) -> Result<()> {

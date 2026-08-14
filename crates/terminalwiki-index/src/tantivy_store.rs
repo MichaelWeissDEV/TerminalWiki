@@ -199,9 +199,21 @@ impl TantivyStore {
             f_size,
         ) = Self::build_schema();
 
-        let index = Index::open_in_dir(&tantivy_dir).unwrap_or_else(|_| {
-            Index::create_in_dir(&tantivy_dir, schema.clone()).expect("create tantivy index")
-        });
+        // Creation is only attempted when opening fails. Both errors are reported:
+        // a disk-full or permission failure here must surface as a `Result`, never
+        // abort the process (spec Gate 2.3).
+        let index = match Index::open_in_dir(&tantivy_dir) {
+            Ok(index) => index,
+            Err(open_err) => {
+                Index::create_in_dir(&tantivy_dir, schema.clone()).map_err(|create_err| {
+                    Error::index(format!(
+                        "Failed to open Tantivy index at {}: {open_err}. \
+                         Creating a new index there also failed: {create_err}",
+                        tantivy_dir.display()
+                    ))
+                })?
+            }
+        };
 
         let reader = index
             .reader_builder()

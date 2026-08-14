@@ -66,6 +66,8 @@ pub fn search(entries: &[IndexEntry], query: &Query) -> Vec<SearchResult> {
         }
     }
 
-    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
+    // `total_cmp` rather than `partial_cmp().unwrap()`: a NaN score would panic
+    // inside a user-facing search path (spec Gate 28).
+    results.sort_by(|a, b| b.score.total_cmp(&a.score));
     results
 }

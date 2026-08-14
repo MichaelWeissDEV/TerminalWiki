@@ -4,7 +4,7 @@
 project = "TerminalWiki"
 copyright = "2026, Michael Weiss"
 author = "Michael Weiss"
-release = "0.1.0"
+release = "0.1.0-alpha"
 
 extensions = [
     "myst_parser",

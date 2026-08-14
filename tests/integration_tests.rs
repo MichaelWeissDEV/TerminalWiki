@@ -1,7 +1,7 @@
 //! Comprehensive Integration Tests for TerminalWiki (spec §57-§62).
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use tempfile::tempdir;
@@ -150,8 +150,18 @@ fn test_index_lifecycle_flow() {
     let store3 = TantivyStore::open_reader(&idx_dir).unwrap();
     let q_ren = Query::from_str("allocation").unwrap();
     let hits_ren = store3.search(&q_ren, 10).unwrap();
-    assert_eq!(hits_ren.len(), 1);
-    assert_eq!(hits_ren[0].relative, Path::new("X.md"));
+    let ren_paths: Vec<&Path> = hits_ren.iter().map(|h| h.relative.as_path()).collect();
+    // Step 3 rewrote B.md to "Patched allocation flaw", so "allocation" now
+    // legitimately matches two documents. What the rename must guarantee is that
+    // the content moved to the new path and the old doc id is gone.
+    assert!(
+        ren_paths.contains(&Path::new("X.md")),
+        "renamed page must be searchable under its new path, got {ren_paths:?}"
+    );
+    assert!(
+        !ren_paths.contains(&Path::new("A.md")),
+        "stale pre-rename doc id must be deleted from the index, got {ren_paths:?}"
+    );
 }
 
 // ─── Phase 58: Test Search Strictly Read-Only ─────────────────────────────────
@@ -179,10 +189,38 @@ fn test_search_is_strictly_read_only() {
         raw_entries.into_iter().map(|e| e.to_state()).collect();
     terminalwiki_index::store::save_state(&idx_dir, &states).unwrap();
 
-    let meta_before = fs::read_to_string(idx_dir.join("state.json")).unwrap();
+    /// Snapshots every file under the index directory as (relative path, len,
+    /// mtime), so segment creation, deletion, or rewriting is detected — not
+    /// just changes to state.json.
+    fn snapshot_dir(dir: &Path) -> Vec<(PathBuf, u64, std::time::SystemTime)> {
+        let mut out = Vec::new();
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(current) = stack.pop() {
+            for entry in fs::read_dir(&current).expect("read index dir") {
+                let entry = entry.expect("dir entry");
+                let path = entry.path();
+                let meta = entry.metadata().expect("entry metadata");
+                if meta.is_dir() {
+                    stack.push(path);
+                } else {
+                    let rel = path.strip_prefix(dir).unwrap_or(&path).to_path_buf();
+                    out.push((rel, meta.len(), meta.modified().expect("mtime")));
+                }
+            }
+        }
+        out.sort();
+        out
+    }
 
-    // Execute search 5 times
-    for _ in 0..5 {
+    let meta_before = fs::read_to_string(idx_dir.join("state.json")).unwrap();
+    let files_before = snapshot_dir(&idx_dir);
+    assert!(
+        !files_before.is_empty(),
+        "index directory must contain files before the read-only check"
+    );
+
+    // A search must never create, delete, or rebuild index data (spec Gate 2.4).
+    for _ in 0..100 {
         let store = TantivyStore::open_reader(&idx_dir).unwrap();
         let q = Query::from_str("Document").unwrap();
         let hits = store.search(&q, 10).unwrap();
@@ -193,6 +231,12 @@ fn test_search_is_strictly_read_only() {
     assert_eq!(
         meta_before, meta_after,
         "Search operations must not modify state.json"
+    );
+
+    let files_after = snapshot_dir(&idx_dir);
+    assert_eq!(
+        files_before, files_after,
+        "100 searches must not create, delete, or rewrite any index file"
     );
 }
 
@@ -209,10 +253,14 @@ fn test_home_page_resolution_priority() {
         mounts: Vec::new(),
     };
 
+    // `Wiki::open` canonicalizes its root, which on macOS resolves the temp dir
+    // /var/... to /private/var/..., so expectations must be canonicalized too.
+    let canonical_root = wiki_root.canonicalize().unwrap();
+
     // 1. Candidate fallback: index.md
     fs::write(wiki_root.join("index.md"), "# Index").unwrap();
     let wiki = Wiki::open(&entry).unwrap();
-    assert_eq!(wiki.home_page(), Some(wiki_root.join("index.md")));
+    assert_eq!(wiki.home_page(), Some(canonical_root.join("index.md")));
 
     // 2. Configured home override
     fs::write(
@@ -224,7 +272,7 @@ fn test_home_page_resolution_priority() {
     fs::write(wiki_root.join("CustomHome.md"), "# Custom").unwrap();
     assert_eq!(
         wiki_custom.home_page(),
-        Some(wiki_root.join("CustomHome.md"))
+        Some(canonical_root.join("CustomHome.md"))
     );
 }
 
@@ -264,12 +312,20 @@ fn test_unicode_width_and_rendering() {
     let german = "Größe und Speicher";
 
     assert_eq!(display_width("🦀"), 2);
-    assert_eq!(display_width(emoji), 23);
+    // 🦀(2) + " "(1) + "Rust"(4) + " "(1) + "Knowledge"(9) + " "(1) + "Base"(4)
+    assert_eq!(display_width(emoji), 22);
     assert_eq!(display_width(japanese), 16);
     assert_eq!(display_width(german), 18);
 
+    // All-CJK input truncated with a width-1 ellipsis can only reach odd widths,
+    // so the contract is "fits within the budget", not "equals the budget".
     let truncated = truncate_display_width(japanese, 8);
-    assert_eq!(display_width(&truncated), 8);
+    assert!(
+        display_width(&truncated) <= 8,
+        "truncation must never exceed the budget, got {} for {truncated:?}",
+        display_width(&truncated)
+    );
+    assert_eq!(truncated, "日本語…");
 
     let padded = pad_display_width("Heap", 10);
     assert_eq!(display_width(&padded), 10);

@@ -1,6 +1,6 @@
 //! Markdown parser producing semantic AST blocks and inlines (spec §55, §56).
 
-use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, HeadingLevel, LinkType, Options, Parser, Tag, TagEnd};
 
 use crate::document::{Block, Document, Inline};
 
@@ -12,13 +12,18 @@ pub fn parse_markdown(text: &str) -> Document {
     options.insert(Options::ENABLE_STRIKETHROUGH);
     options.insert(Options::ENABLE_TASKLISTS);
     options.insert(Options::ENABLE_MATH);
+    // Without this, CommonMark parses `[[Heap]]` as a nested link reference and
+    // splits it across several `Event::Text` chunks, so no text-level scanner can
+    // ever see a complete `[[...]]` span.
+    options.insert(Options::ENABLE_WIKILINKS);
 
     let parser = Parser::new_ext(text, options);
     let mut doc = Document::default();
 
     let mut block_stack: Vec<Vec<Block>> = vec![Vec::new()];
     let mut inline_stack: Vec<Vec<Inline>> = vec![Vec::new()];
-    let mut link_dest_stack: Vec<String> = Vec::new();
+    // (destination, wikilink pothole flag) — `None` means an ordinary CommonMark link.
+    let mut link_dest_stack: Vec<(String, Option<bool>)> = Vec::new();
     let mut image_dest_stack: Vec<String> = Vec::new();
 
     let mut current_code_block: Option<Option<String>> = None;
@@ -196,17 +201,38 @@ pub fn parse_markdown(text: &str) -> Document {
                     .unwrap()
                     .push(Inline::Strike(inlines));
             }
-            Event::Start(Tag::Link { dest_url, .. }) => {
-                link_dest_stack.push(dest_url.to_string());
+            Event::Start(Tag::Link {
+                link_type,
+                dest_url,
+                ..
+            }) => {
+                let pothole = match link_type {
+                    LinkType::WikiLink { has_pothole } => Some(has_pothole),
+                    _ => None,
+                };
+                link_dest_stack.push((dest_url.to_string(), pothole));
                 inline_stack.push(Vec::new());
             }
             Event::End(TagEnd::Link) => {
                 let inlines = inline_stack.pop().unwrap_or_default();
-                let target = link_dest_stack.pop().unwrap_or_default();
-                inline_stack.last_mut().unwrap().push(Inline::Link {
-                    target,
-                    text: inlines,
-                });
+                let (target, pothole) = link_dest_stack.pop().unwrap_or_default();
+                let inline = match pothole {
+                    // `[[Target|Label]]` — the link body is a distinct display label.
+                    Some(true) => Inline::WikiLink {
+                        target,
+                        label: Some(inlines.iter().map(|i| i.plain_text()).collect::<String>()),
+                    },
+                    // `[[Target]]` — body and target are the same text.
+                    Some(false) => Inline::WikiLink {
+                        target,
+                        label: None,
+                    },
+                    None => Inline::Link {
+                        target,
+                        text: inlines,
+                    },
+                };
+                inline_stack.last_mut().unwrap().push(inline);
             }
             Event::Start(Tag::Image { dest_url, .. }) => {
                 image_dest_stack.push(dest_url.to_string());
