@@ -84,6 +84,9 @@ pub fn draw(app: &App) -> std::io::Result<()> {
         Mode::Graph => {
             draw_graph_view(app, width, height, &mut out)?;
         }
+        Mode::Normal | Mode::InPageSearch | Mode::Command if app.page_missing => {
+            draw_missing_page(app, width, &mut out)?;
+        }
         Mode::Normal | Mode::InPageSearch | Mode::Command => {
             draw_content_viewport(app, width, height, &mut out)?;
         }
@@ -551,5 +554,36 @@ fn draw_graph_view(
         ResetColor
     )?;
 
+    Ok(())
+}
+
+/// Shown when the open page was deleted on disk (spec Gate 2.15).
+///
+/// Deliberately plain text with no box: the article area keeps its typography
+/// even when it has nothing to show.
+fn draw_missing_page(app: &App, width: usize, out: &mut std::io::Stdout) -> std::io::Result<()> {
+    let path = sanitize_line(&app.current_path.to_string_lossy());
+    let lines = [
+        String::new(),
+        "  This page was removed from disk.".to_string(),
+        String::new(),
+        format!(
+            "  {}",
+            truncate_display_width(&path, width.saturating_sub(4))
+        ),
+        String::new(),
+        "  b   back to the previous page".to_string(),
+        "  r   retry loading it".to_string(),
+    ];
+
+    for (i, line) in lines.iter().enumerate() {
+        execute!(
+            out,
+            MoveTo(0, (i + 2) as u16),
+            SetForegroundColor(CColor::DarkGrey),
+            Print(truncate_display_width(line, width)),
+            ResetColor
+        )?;
+    }
     Ok(())
 }

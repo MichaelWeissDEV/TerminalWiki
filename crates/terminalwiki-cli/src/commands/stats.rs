@@ -64,7 +64,7 @@ pub fn stats(args: Args, config: Config, wikis: WikiSet) -> Result<()> {
         );
 
         // Index stats if available.
-        if let Ok(idx) = terminalwiki_index::WikiIndex::load(&wiki.name) {
+        if let Ok(idx) = crate::commands::open_index(wiki, &config) {
             let tag_count = idx.tags().len();
             println!("  Indexed:  {} pages", idx.entries.len());
             if tag_count > 0 {

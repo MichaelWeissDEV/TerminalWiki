@@ -24,7 +24,7 @@ struct SearchResultJsonItem {
     snippet: Option<String>,
 }
 
-pub fn search(query: String, args: Args, _config: Config, wikis: WikiSet) -> Result<()> {
+pub fn search(query: String, args: Args, config: Config, wikis: WikiSet) -> Result<()> {
     if wikis.is_empty() {
         return Err(Error::NoWikiConfigured);
     }
@@ -50,7 +50,7 @@ pub fn search(query: String, args: Args, _config: Config, wikis: WikiSet) -> Res
     let mut any_hits = false;
 
     for wiki in target_wikis {
-        let idx = terminalwiki_index::WikiIndex::load(&wiki.name).map_err(|e| {
+        let idx = crate::commands::open_index(wiki, &config).map_err(|e| {
             Error::index(format!(
                 "Search index for '{}' is unavailable: {e}. Run 'tw index rebuild'.",
                 wiki.name

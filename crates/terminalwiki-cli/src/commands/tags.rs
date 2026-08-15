@@ -13,7 +13,7 @@ use crate::commands::wiki_selection::resolve_wiki_selection;
 pub fn tags(
     wiki_opt: Option<String>,
     mut args: Args,
-    _config: Config,
+    config: Config,
     wikis: WikiSet,
 ) -> Result<()> {
     if wiki_opt.is_some() {
@@ -24,7 +24,7 @@ pub fn tags(
     let mut all_tags: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
     for wiki in target_wikis {
-        if let Ok(idx) = terminalwiki_index::WikiIndex::load(&wiki.name) {
+        if let Ok(idx) = crate::commands::open_index(wiki, &config) {
             for (tag, pages) in idx.tags() {
                 let entry = all_tags.entry(tag).or_default();
                 for p in pages {
@@ -47,12 +47,12 @@ pub fn tags(
 }
 
 /// `tw tag TAG` — list all pages with a given tag.
-pub fn tag(tag_query: String, args: Args, _config: Config, wikis: WikiSet) -> Result<()> {
+pub fn tag(tag_query: String, args: Args, config: Config, wikis: WikiSet) -> Result<()> {
     let target_wikis = resolve_wiki_selection(&args, &wikis)?;
 
     let mut found = false;
     for wiki in target_wikis {
-        if let Ok(idx) = terminalwiki_index::WikiIndex::load(&wiki.name) {
+        if let Ok(idx) = crate::commands::open_index(wiki, &config) {
             for (tag, pages) in idx.tags() {
                 if tag.eq_ignore_ascii_case(&tag_query) {
                     for p in pages {

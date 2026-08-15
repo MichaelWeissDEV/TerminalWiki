@@ -26,7 +26,7 @@ fn hash_content(content: &[u8]) -> [u8; 32] {
 }
 
 pub fn parse_markdown(content: &str) -> (Vec<String>, String, Vec<String>) {
-    use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+    use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
     let mut headings = Vec::new();
     let mut body = String::new();
@@ -35,7 +35,13 @@ pub fn parse_markdown(content: &str) -> (Vec<String>, String, Vec<String>) {
     let mut in_heading = false;
     let mut current_heading = String::new();
 
-    let parser = Parser::new(content);
+    // Without wikilink support, CommonMark shreds `[[Heap]]` into separate text
+    // events and the indexed body reads "Links  [ [ Heap" — which is then what
+    // search snippets show the user. With it, the link contributes its target
+    // text cleanly.
+    let mut options = Options::empty();
+    options.insert(Options::ENABLE_WIKILINKS);
+    let parser = Parser::new_ext(content, options);
 
     for event in parser {
         match event {

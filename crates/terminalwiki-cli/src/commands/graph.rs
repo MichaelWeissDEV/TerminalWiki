@@ -13,7 +13,7 @@ fn build_graph(wikis: &WikiSet, config: &Config) -> WikiGraph {
     let mut entries = Vec::new();
 
     for wiki in wikis.iter() {
-        if let Ok(idx) = terminalwiki_index::WikiIndex::load(&wiki.name) {
+        if let Ok(idx) = crate::commands::open_index(wiki, config) {
             for e in idx.entries {
                 entries.push(GraphEntry {
                     wiki: e.wiki,

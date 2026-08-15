@@ -1387,6 +1387,7 @@ dependencies = [
  "ignore",
  "notify",
  "serde",
+ "tempfile",
  "toml",
  "unicode-segmentation",
  "unicode-width",

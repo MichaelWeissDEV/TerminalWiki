@@ -5,6 +5,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use terminalwiki_core::resolve;
+use terminalwiki_core::watch::{ChangeKind, WikiChange};
 use terminalwiki_core::wiki::WikiSet;
 use terminalwiki_core::{Config, Error, Result};
 use terminalwiki_graph::{BacklinkInfo, GraphEntry, LayoutEngine, SubGraph, WikiGraph};
@@ -111,6 +112,9 @@ pub struct App<'a> {
     /// walking every entry of every wiki on each `b` press.
     pub graph_cache: Option<WikiGraph>,
     pub graph_view: Option<GraphViewState>,
+    /// The open page was deleted on disk; the view shows a notice instead of
+    /// stale content.
+    pub page_missing: bool,
 
     pub status_message: Option<String>,
     pub should_quit: bool,
@@ -218,6 +222,7 @@ impl<'a> App<'a> {
             search_matches: Vec::new(),
             graph_cache: None,
             graph_view: None,
+            page_missing: false,
             status_message: None,
             should_quit: false,
             should_suspend_for_editor: None,
@@ -501,6 +506,149 @@ impl<'a> App<'a> {
     /// Drops the cached graph so the next consumer rebuilds it.
     pub fn invalidate_graph(&mut self) {
         self.graph_cache = None;
+    }
+
+    /// Applies a settled batch of filesystem changes (spec Gate 2.10-2.16).
+    ///
+    /// Everything derived from files is refreshed together so the finder,
+    /// search, backlinks and graph never disagree about what exists:
+    ///
+    /// 1. reconcile the index of each affected wiki (incremental),
+    /// 2. rebuild the fuzzy dataset from index *metadata* — never by re-reading
+    ///    file bodies,
+    /// 3. invalidate the graph so it is rebuilt lazily on next use,
+    /// 4. reload the open page if it was touched, preserving scroll.
+    ///
+    /// Returns `true` if anything user-visible changed and a redraw is needed.
+    pub fn apply_fs_changes(&mut self, changes: &[WikiChange]) -> bool {
+        if changes.is_empty() {
+            return false;
+        }
+
+        // The open page may have been renamed out from under us; follow it
+        // rather than showing a stale or missing page (spec Gate 2.16).
+        let mut followed_rename = None;
+        for change in changes {
+            if let ChangeKind::Rename { from } = &change.kind {
+                if change.wiki == self.current_wiki {
+                    if let Some(wiki) = self.wikis.get(&self.current_wiki) {
+                        if from.strip_prefix(&wiki.root).ok() == Some(self.current_path.as_path()) {
+                            followed_rename = change.relative_to(&wiki.root);
+                        }
+                    }
+                }
+            }
+        }
+
+        // One reconcile per affected wiki, not per changed file.
+        let mut wikis_touched: Vec<String> = changes.iter().map(|c| c.wiki.clone()).collect();
+        wikis_touched.sort();
+        wikis_touched.dedup();
+
+        for name in &wikis_touched {
+            if let Some(wiki) = self.wikis.get(name) {
+                if let Err(e) = terminalwiki_index::WikiIndex::open(wiki, self.config) {
+                    self.status_message = Some(format!("Index update failed: {e}"));
+                }
+            }
+        }
+
+        self.rebuild_fuzzy_dataset();
+        self.invalidate_graph();
+
+        // A graph view showing a now-stale neighbourhood is reopened at the
+        // same depth so it reflects the new link structure.
+        if self.mode == Mode::Graph {
+            if let Some(depth) = self.graph_view.as_ref().map(|v| v.depth) {
+                self.open_graph_at_depth(depth);
+            }
+        }
+
+        if let Some(new_rel) = followed_rename {
+            let new_str = new_rel.to_string_lossy().into_owned();
+            let wiki = self.current_wiki.clone();
+            if self.load_page(&wiki, &new_str, false).is_ok() {
+                self.page_missing = false;
+                self.status_message = Some(format!("Page renamed to {new_str}"));
+                return true;
+            }
+        }
+
+        if self.current_page_affected(changes) {
+            self.reload_current_page();
+        }
+
+        true
+    }
+
+    /// True if one of the changes touches the page currently displayed.
+    fn current_page_affected(&self, changes: &[WikiChange]) -> bool {
+        let Some(wiki) = self.wikis.get(&self.current_wiki) else {
+            return false;
+        };
+        let absolute = wiki.root.join(&self.current_path);
+        changes.iter().any(|c| {
+            c.path == absolute
+                || matches!(&c.kind, ChangeKind::Rename { from } if *from == absolute)
+        })
+    }
+
+    /// Re-renders the open page, keeping the reader roughly where they were.
+    ///
+    /// Scroll is clamped rather than restored exactly: after an edit the old
+    /// line number may not exist (spec Gate 2.14). Block-level anchoring comes
+    /// with the rich-content layout model.
+    pub fn reload_current_page(&mut self) {
+        if self.current_path.as_os_str().is_empty() {
+            return;
+        }
+        let Some(wiki) = self.wikis.get(&self.current_wiki) else {
+            return;
+        };
+        let absolute = wiki.root.join(&self.current_path);
+
+        if !absolute.exists() {
+            // Deleted externally: say so instead of crashing or showing stale
+            // content (spec Gate 2.15).
+            self.page_missing = true;
+            self.status_message =
+                Some("Page was removed from disk — [b] back  [r] retry".to_string());
+            return;
+        }
+
+        let previous_scroll = self.scroll;
+        let page = self.current_path.to_string_lossy().into_owned();
+        let wiki_name = self.current_wiki.clone();
+        if self.load_page(&wiki_name, &page, false).is_ok() {
+            self.page_missing = false;
+            let max_scroll = self.lines.len().saturating_sub(1);
+            self.scroll = previous_scroll.min(max_scroll);
+        }
+    }
+
+    /// Rebuilds the fuzzy dataset from index metadata.
+    ///
+    /// Metadata only — titles, paths, aliases, tags. Re-reading file bodies to
+    /// refresh a finder would make every save cost a full scan.
+    pub fn rebuild_fuzzy_dataset(&mut self) {
+        let mut items = Vec::new();
+        for wiki in self.wikis.iter() {
+            if let Ok(idx) = terminalwiki_index::WikiIndex::load(&wiki.name) {
+                for e in &idx.entries {
+                    items.push(FuzzyItem {
+                        wiki: wiki.name.clone(),
+                        relative: e.relative.clone(),
+                        title: e.title.clone(),
+                        aliases: e.aliases.clone(),
+                        tags: e.tags.clone(),
+                    });
+                }
+            }
+        }
+        self.fuzzy_dataset = FuzzyDataset::new(items);
+        if self.mode == Mode::Finder {
+            self.update_finder_filter();
+        }
     }
 
     pub fn load_backlinks(&mut self) {

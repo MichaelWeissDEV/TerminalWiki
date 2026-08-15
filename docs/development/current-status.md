@@ -26,7 +26,7 @@ in "Baseline". No row is asserted from expectation.
 |---|---|---|
 | `cargo fmt --all -- --check` | 0 | PASS — no diffs |
 | `cargo check --workspace --all-targets --all-features` | 0 | PASS — 0 errors, 0 warnings |
-| `cargo test --workspace --all-features` | 0 | PASS — **196 passed, 0 failed** |
+| `cargo test --workspace --all-features` | 0 | PASS — **221 passed, 0 failed** |
 | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | 0 | PASS — 0 warnings |
 | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps` | 0 | PASS — 0 warnings |
 | `cargo build --release --workspace` | 0 | PASS — release binary produced |
@@ -37,13 +37,16 @@ in "Baseline". No row is asserted from expectation.
 
 | Target | Passed |
 |---|---|
-| `terminalwiki-core` (lib) | 152 |
+| `terminalwiki-core` (lib) | 156 |
+| `terminalwiki-core` (`tests/watcher_tests.rs`) | 6 |
 | `terminalwiki-render` (lib) | 16 |
 | `terminalwiki-index` (lib) | 13 |
+| `terminalwiki-index` (`tests/freshness_tests.rs`) | 7 |
 | `terminalwiki-graph` (`tests/graph_tests.rs`) | 8 |
 | `terminalwiki` (`tests/integration_tests.rs`) | 5 |
 | `terminalwiki-tui` (`tests/graph_view_tests.rs`) | 5 |
-| **Total** | **196** |
+| `terminalwiki-tui` (`tests/live_update_tests.rs`) | 8 |
+| **Total** | **221** |
 
 Binary and doc-test targets report 0 tests and are omitted.
 
@@ -247,6 +250,80 @@ and clamping, `:graph` wiring, cache reuse and invalidation). These build a real
 wiki and index with `TW_CACHE_DIR` pointed at a temp directory, so they never
 touch the developer's cache.
 
+### Automatic index freshness (supplementary spec Gate 1)
+
+The wiki directory is the source of truth, so a file created with any external
+tool must be visible to the next command without `tw index update`. Added
+`WikiIndex::open`, which reconciles before returning, and wired it into every
+read path (`search`, `find`, `tags`, `stats`, `links`, `graph`, TUI startup).
+
+Verified against the release binary with **no index command ever run**:
+
+```
+$ printf '# UAF\nUse after free. Links [[Heap]].\n' > wiki/UAF.md
+$ tw search "use after free"     →  UAF · live:UAF.md
+$ tw backlinks Heap              →  live:UAF.md (UAF), live:index.md (index)
+$ tw graph Heap --format dot     →  "UAF.md" -> "Heap.md"
+```
+
+Three things this needed:
+
+- **Search stays read-only.** Reconciliation is a step *before* the search, never
+  something the search does. `test_search_is_strictly_read_only` (100 searches,
+  full index-directory snapshot) still passes untouched.
+- **Concurrency.** Two shells running `tw search` at once both want the Tantivy
+  writer. `try_apply_delta` returns `Ok(false)` on `LockFailure` instead of
+  erroring, so the loser reads the current index and reports
+  `Index is being updated by another process`. Verified with six concurrent
+  processes: all exited 0, and all 341 documents were correctly indexed.
+- **Schema changes are announced, not silent.** `store::load_state` now
+  distinguishes `Absent` / `SchemaMismatch` / `Unreadable`; previously all three
+  collapsed to `None` and a rebuild was laundered through `update` as an
+  "incremental" update of every document. The notice is emitted *before* the
+  rebuild starts.
+
+`index.auto_update` (default `true`) turns the whole behaviour off.
+
+Cost on an unchanged 300-file wiki: ~30 ms per command (metadata stat + compare).
+
+### File watcher rewritten (supplementary spec Gate 2.4-2.9)
+
+The previous watcher had a single `last_event` timestamp, no rename support, and
+hardcoded `/.git/` / `/.cache/` substring checks. Rewritten with:
+
+- **Per-path debouncing** (`HashMap<PathBuf, PendingChange>`), so unrelated
+  concurrent changes cannot mask each other.
+- **`ChangeKind::Rename { from }`** carrying both endpoints.
+- **Coalescing**, so an editor's write-temp-then-rename burst becomes one
+  logical change to the target.
+- **Batching** over a 150 ms window, so a 500-file `git pull` is one batch.
+- **Ignore rules from `.gitignore` and `.twignore`**, matched on path
+  *components* — the old substring check would also have skipped a user
+  directory legitimately named `.cache`.
+- **All registered wikis** watched through one watcher and one receiver.
+
+Two platform details were found by testing rather than assumed: macOS FSEvents
+reports canonical paths (`/private/var/...`), so the watched root must be
+canonicalized or every event is silently dropped; and FSEvents coalesces flags
+per path, so a `Delete` could be followed by a stale `Modify` — which must not
+resurrect a deleted file.
+
+### Live TUI updates and the event runtime (Gate 2.1-2.3, 2.10-2.16)
+
+Added `runtime::EventLoop`, which multiplexes the keyboard, terminal resizes and
+filesystem batches into one `AppEvent`. Blocking happens in exactly one place —
+the terminal poll, whose timeout doubles as the tick for the other sources — so
+an idle TUI costs one wakeup per 100 ms and redraws only in response to an event
+rather than every frame. This is the abstraction the image and math workers plug
+into later; no async runtime was introduced.
+
+`App::apply_fs_changes` then refreshes everything derived from files together, so
+finder, search, backlinks and graph never disagree: one incremental index
+reconcile per affected wiki, fuzzy dataset rebuilt from index *metadata* (never
+by re-reading file bodies), graph invalidated for lazy rebuild, and the open page
+reloaded with its scroll clamped. A deleted open page shows a notice with
+`[b] back` / `[r] retry` instead of crashing; a renamed open page is followed.
+
 ### Gate 1 — Version coherence
 
 `crates/terminalwiki-cli/src/lib.rs` printed a **hardcoded** `"terminalwiki 0.1.0"`
@@ -273,7 +350,7 @@ current tree and the RC Definition of Done.
 | 6 | Graph CLI scaling | **Partly done** — node cap and Unicode-correct label widths landed with the graph view. Still open: `tw graph` with no page still materialises the whole graph, `--max-nodes` is not a CLI flag, and width still comes from `COLUMNS` rather than the real TTY size. |
 | 7 | Graph TUI — view, selection, navigation, depth | **Done** (see above) |
 | 7.11-7.13 | Graph background layout, generation IDs, cancellation | **Deferred, deliberately** — the layout is computed once per open (not per frame) and is milliseconds once the graph is cached, so the cost was never the layout. The event-loop restructuring a worker needs is the same one the file watcher requires; doing it once there avoids touching graph code twice. |
-| 8 | **File watcher integration into the TUI** | **Not started** — `watch.rs` exists in core but the TUI never constructs a watcher |
+| 8 | File watcher integrated into the TUI | **Done** (see above) |
 | 9 | Terminal capability layer (pixel size, mouse, tmux, SSH) | `caps.rs` has the protocol enum only |
 | 10 | **Native image rendering** (kitty / iTerm2 / sixel / unicode backends) | **Not started** — only a `GraphicsProtocol` enum and config plumbing; no backend renders anything |
 | 11 | **Math rendering** | **Stub** — `math.rs` is 16 lines emitting `⟨formula⟩`; `render.rs` hardcodes that form rather than delegating |
@@ -285,6 +362,13 @@ current tree and the RC Definition of Done.
 
 ### Known limitations
 
+- **Hyphenated search terms find nothing.** `tw search marker-xyz` returns no
+  results while `tw search "marker xyz"` and `tw search marker` both work: the
+  tokenizer splits on the hyphen but the query path does not treat the term as a
+  phrase. Found while testing concurrent reconciliation. Belongs to the search
+  semantics gate (Gate 3/14) and is not yet fixed.
+- **Ignore rules are read once**, when the watcher starts. Editing `.gitignore`
+  while the TUI runs does not take effect until restart.
 - **Sphinx is not installed** on the development machine, so the strict docs
   build (Gate 21) has never been executed here. Any future "Docs: PASS" claim
   must cite a real run.

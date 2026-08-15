@@ -22,14 +22,14 @@ struct FuzzyResultJsonItem {
     score: u32,
 }
 
-pub fn find(query: String, args: Args, _config: Config, wikis: WikiSet) -> Result<()> {
+pub fn find(query: String, args: Args, config: Config, wikis: WikiSet) -> Result<()> {
     let target_wikis = resolve_wiki_selection(&args, &wikis)?;
 
     let mut json_results = Vec::new();
     let mut all_hits = Vec::new();
 
     for wiki in target_wikis {
-        if let Ok(idx) = terminalwiki_index::WikiIndex::load(&wiki.name) {
+        if let Ok(idx) = crate::commands::open_index(wiki, &config) {
             let hits = idx.find(&query, 20);
             for hit in hits {
                 all_hits.push(hit);

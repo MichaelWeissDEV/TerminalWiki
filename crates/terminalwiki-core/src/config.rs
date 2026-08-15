@@ -215,6 +215,12 @@ pub struct IndexConfig {
     pub max_file_size: u64,
     /// Extra ignore globs, merged with `.gitignore` and `.twignore` (spec §53).
     pub ignore: Vec<String>,
+    /// Reconcile the index with the filesystem automatically before reads.
+    ///
+    /// The wiki directory is the source of truth, so files created with any
+    /// external tool should appear without a manual `tw index update`. Set to
+    /// `false` to keep the index exactly as last written.
+    pub auto_update: bool,
 }
 
 impl Default for IndexConfig {
@@ -224,6 +230,7 @@ impl Default for IndexConfig {
             hidden: false,
             max_file_size: 16 * 1024 * 1024,
             ignore: Vec::new(),
+            auto_update: true,
         }
     }
 }
@@ -303,6 +310,7 @@ pub struct ConfigLayer {
     pub index_hidden: Option<bool>,
     pub max_file_size: Option<u64>,
     pub ignore: Option<Vec<String>>,
+    pub index_auto_update: Option<bool>,
     pub mouse: Option<bool>,
     pub history_size: Option<usize>,
     pub tmux_passthrough: Option<Tri>,
@@ -336,6 +344,7 @@ impl ConfigLayer {
         set!(base.index.code, self.index_code);
         set!(base.index.hidden, self.index_hidden);
         set!(base.index.max_file_size, self.max_file_size);
+        set!(base.index.auto_update, self.index_auto_update);
         set!(base.tui.mouse, self.mouse);
         set!(base.tui.history_size, self.history_size);
         set!(base.terminal.tmux_passthrough, self.tmux_passthrough);
@@ -391,6 +400,7 @@ struct IndexFile {
     hidden: Option<bool>,
     max_file_size: Option<toml::Value>,
     ignore: Option<Vec<String>>,
+    auto_update: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -513,6 +523,7 @@ pub fn parse_global(text: &str, source: Option<PathBuf>) -> Result<ConfigLayer> 
         layer.index_code = i.code;
         layer.index_hidden = i.hidden;
         layer.ignore = i.ignore;
+        layer.index_auto_update = i.auto_update;
         if let Some(v) = &i.max_file_size {
             layer.max_file_size = Some(parse_toml_size(v)?);
         }
@@ -657,6 +668,7 @@ math = true
 code = true
 hidden = false
 max_file_size = "16 MiB"
+auto_update = true
 
 [tui]
 mouse = true

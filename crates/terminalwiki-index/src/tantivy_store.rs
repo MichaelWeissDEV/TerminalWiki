@@ -267,13 +267,41 @@ impl TantivyStore {
         Ok(())
     }
 
+    /// Acquires the index writer, distinguishing lock contention from failure.
+    ///
+    /// Returns `Ok(None)` when another process or thread already holds the
+    /// writer lock. Automatic reconciliation must not turn a second concurrent
+    /// `tw search` into an error, so callers on that path skip the update and
+    /// read the index as it stands.
+    fn try_writer(&self) -> Result<Option<IndexWriter>> {
+        match self.index.writer(50_000_000) {
+            Ok(w) => Ok(Some(w)),
+            Err(tantivy::TantivyError::LockFailure(_, _)) => Ok(None),
+            Err(e) => Err(Error::index(format!("Failed to acquire index writer: {e}"))),
+        }
+    }
+
+    /// Like [`TantivyStore::apply_delta`], but returns `Ok(false)` instead of an
+    /// error when the writer lock is held elsewhere.
+    pub fn try_apply_delta(&mut self, delta: &IndexDelta) -> Result<bool> {
+        let Some(writer) = self.try_writer()? else {
+            return Ok(false);
+        };
+        self.apply_delta_with(writer, delta)?;
+        Ok(true)
+    }
+
     /// Applies an incremental delta without wiping existing documents (spec §11, §14).
     pub fn apply_delta(&mut self, delta: &IndexDelta) -> Result<()> {
-        let mut writer: IndexWriter = self
+        let writer: IndexWriter = self
             .index
             .writer(50_000_000)
             .map_err(|e| Error::index(format!("Failed to acquire index writer: {e}")))?;
+        self.apply_delta_with(writer, delta)
+    }
 
+    /// Shared body, so the writer is acquired exactly once per delta.
+    fn apply_delta_with(&mut self, mut writer: IndexWriter, delta: &IndexDelta) -> Result<()> {
         // 1. Delete removed documents
         for doc_id in &delta.deleted_doc_ids {
             writer.delete_term(Term::from_field_text(self.f_doc_id, doc_id));

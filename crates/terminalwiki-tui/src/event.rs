@@ -10,6 +10,17 @@ use terminalwiki_render::LinkTarget;
 
 use crate::app::{App, Mode};
 
+/// Dispatches one terminal event delivered by the event runtime.
+pub fn handle_terminal_event(app: &mut App, event: Event) -> Result<()> {
+    match event {
+        Event::Key(key) => handle_key_event(app, key),
+        // A resize only needs a redraw, which the caller performs.
+        Event::Resize(_, _) => Ok(()),
+        _ => Ok(()),
+    }
+}
+
+/// Polls the terminal directly. Retained for callers outside the event runtime.
 pub fn handle_event(app: &mut App) -> Result<()> {
     if !poll_event(Duration::from_millis(100))
         .map_err(|e| terminalwiki_core::Error::other(e.to_string()))?
@@ -18,12 +29,7 @@ pub fn handle_event(app: &mut App) -> Result<()> {
     }
 
     let event = read_event().map_err(|e| terminalwiki_core::Error::other(e.to_string()))?;
-
-    if let Event::Key(key) = event {
-        handle_key_event(app, key)?;
-    }
-
-    Ok(())
+    handle_terminal_event(app, event)
 }
 
 fn handle_key_event(app: &mut App, key: KeyEvent) -> Result<()> {
@@ -42,6 +48,28 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> Result<()> {
 fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<()> {
     let (_, rows) = crossterm::terminal::size().unwrap_or((80, 24));
     let view_h = (rows as usize).saturating_sub(3);
+
+    // While the "page removed from disk" notice is shown, the only meaningful
+    // actions are going back or retrying; everything else would operate on a
+    // page that no longer exists.
+    if app.page_missing {
+        match (key.modifiers, key.code) {
+            (KeyModifiers::NONE, KeyCode::Char('b')) | (KeyModifiers::NONE, KeyCode::Backspace) => {
+                app.page_missing = false;
+                app.go_back();
+                return Ok(());
+            }
+            (KeyModifiers::NONE, KeyCode::Char('r')) => {
+                app.reload_current_page();
+                return Ok(());
+            }
+            (KeyModifiers::NONE, KeyCode::Char('q')) | (KeyModifiers::NONE, KeyCode::Esc) => {
+                app.should_quit = true;
+                return Ok(());
+            }
+            _ => {}
+        }
+    }
 
     match (key.modifiers, key.code) {
         (KeyModifiers::NONE, KeyCode::Char('q')) | (KeyModifiers::NONE, KeyCode::Esc) => {

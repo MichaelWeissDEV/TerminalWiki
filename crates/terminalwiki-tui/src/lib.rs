@@ -2,15 +2,18 @@
 
 pub mod app;
 pub mod event;
+pub mod runtime;
 pub mod terminal;
 pub mod ui;
 
 use std::path::PathBuf;
 
+use terminalwiki_core::watch::WikiWatcher;
 use terminalwiki_core::wiki::WikiSet;
 use terminalwiki_core::{Config, Result};
 
 pub use app::App;
+pub use runtime::{AppEvent, EventLoop};
 pub use terminal::TerminalGuard;
 
 /// Launches the interactive TUI application.
@@ -20,6 +23,15 @@ pub fn run_tui(
     initial_wiki: Option<String>,
     initial_page: Option<String>,
 ) -> Result<()> {
+    // Reconcile before building the index-backed view, so a file created since
+    // the last run is already present when the finder opens (spec Gate 1.3).
+    // Done once at startup; from here the watcher drives updates.
+    if config.index.auto_update {
+        for wiki in wikis.iter() {
+            let _ = terminalwiki_index::WikiIndex::open(wiki, config);
+        }
+    }
+
     let mut app = App::new(wikis, config, initial_wiki, initial_page)?;
 
     while !app.should_quit {
@@ -27,9 +39,35 @@ pub fn run_tui(
         {
             let _guard = TerminalGuard::enter()?;
 
+            // The watcher is recreated per session so it picks up wikis added
+            // while the editor was suspended. Failure is not fatal: the TUI
+            // simply runs without live updates.
+            let mut events = match build_watcher(wikis) {
+                Some(watcher) => EventLoop::with_watcher(watcher),
+                None => {
+                    app.status_message =
+                        Some("Live file updates unavailable; use :reload".to_string());
+                    EventLoop::new()
+                }
+            };
+
+            ui::draw(&app).map_err(|e| terminalwiki_core::Error::other(e.to_string()))?;
+
             while !app.should_quit && app.should_suspend_for_editor.is_none() {
-                ui::draw(&app).map_err(|e| terminalwiki_core::Error::other(e.to_string()))?;
-                event::handle_event(&mut app)?;
+                // Redraw only in response to something, so an idle TUI costs
+                // one wakeup per poll interval rather than a redraw per frame.
+                let redraw = match events.next_event()? {
+                    AppEvent::Terminal(ev) => {
+                        event::handle_terminal_event(&mut app, ev)?;
+                        true
+                    }
+                    AppEvent::Filesystem(changes) => app.apply_fs_changes(&changes),
+                    AppEvent::Tick => false,
+                };
+
+                if redraw {
+                    ui::draw(&app).map_err(|e| terminalwiki_core::Error::other(e.to_string()))?;
+                }
             }
         } // TerminalGuard dropped here: terminal restored to normal mode
 
@@ -43,6 +81,23 @@ pub fn run_tui(
     }
 
     Ok(())
+}
+
+/// Builds a watcher covering every registered wiki and its mounts.
+///
+/// Returns `None` if no wiki could be watched, which keeps the TUI usable on
+/// platforms or sandboxes where watching is unavailable.
+fn build_watcher(wikis: &WikiSet) -> Option<WikiWatcher> {
+    // Every registered wiki is watched. Subwikis are mounted *by name* and are
+    // themselves registered wikis, so iterating the set already covers them.
+    let roots: Vec<(String, PathBuf)> = wikis
+        .iter()
+        .map(|w| (w.name.clone(), w.root.clone()))
+        .collect();
+    if roots.is_empty() {
+        return None;
+    }
+    WikiWatcher::new(roots).ok()
 }
 
 fn open_editor_subprocess(path: &PathBuf, config: &Config) -> Result<()> {

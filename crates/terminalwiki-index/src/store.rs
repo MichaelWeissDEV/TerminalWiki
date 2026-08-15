@@ -41,24 +41,55 @@ pub fn save_state(index_dir: &Path, states: &[DocumentState]) -> Result<()> {
     Ok(())
 }
 
-pub fn load_index(index_dir: &Path) -> Result<Option<Vec<DocumentState>>> {
+/// Why persisted state could not be used, or the state itself.
+///
+/// A schema mismatch is deliberately distinguished from "no index yet": the
+/// former requires a full rebuild and must be announced to the user, whereas
+/// collapsing both into `None` turns a rebuild into a silent, minutes-long
+/// "incremental update" of every document.
+#[derive(Debug)]
+pub enum StoredState {
+    /// No index has been built for this wiki yet.
+    Absent,
+    /// State exists but was written by a different index schema.
+    SchemaMismatch {
+        found: u32,
+        expected: u32,
+    },
+    /// State exists but could not be parsed; treated like a rebuild.
+    Unreadable,
+    Loaded(Vec<DocumentState>),
+}
+
+/// Loads persisted document state, reporting *why* it is unusable when it is.
+pub fn load_state(index_dir: &Path) -> Result<StoredState> {
     let state_path = index_dir.join("state.json");
 
     if !state_path.exists() {
-        return Ok(None);
+        return Ok(StoredState::Absent);
     }
 
     let file = File::open(&state_path).map_err(|e| Error::io(&state_path, e))?;
     let state: IndexState = match serde_json::from_reader(file) {
         Ok(s) => s,
-        Err(_) => return Ok(None),
+        Err(_) => return Ok(StoredState::Unreadable),
     };
 
     if state.schema_version != INDEX_SCHEMA_VERSION {
-        return Ok(None);
+        return Ok(StoredState::SchemaMismatch {
+            found: state.schema_version,
+            expected: INDEX_SCHEMA_VERSION,
+        });
     }
 
-    Ok(Some(state.entries))
+    Ok(StoredState::Loaded(state.entries))
+}
+
+pub fn load_index(index_dir: &Path) -> Result<Option<Vec<DocumentState>>> {
+    Ok(match load_state(index_dir)? {
+        StoredState::Loaded(entries) => Some(entries),
+        _ => None,
+    })
 }
 
 pub fn load_meta(index_dir: &Path) -> Result<Option<IndexState>> {
