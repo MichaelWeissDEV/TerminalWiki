@@ -13,4 +13,4 @@ pub use graph::{
 };
 pub use layout::{export_dot, export_dot_subgraph, LayoutEngine};
 pub use related::RelatedPage;
-pub use render::render_graph;
+pub use render::{render_graph, GraphRender, LabelPlacement};

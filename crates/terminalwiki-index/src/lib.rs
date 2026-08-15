@@ -144,13 +144,16 @@ impl WikiIndex {
         let target_rel = page_relative.to_string_lossy().to_string();
 
         for entry in &self.entries {
-            for link in &entry.wiki_links {
-                if link == &target_stem || link == &target_rel {
-                    results.push(BacklinkResult {
-                        from: entry.relative.clone(),
-                        context: format!("Page: {}", entry.title),
-                    });
-                }
+            // One result per linking page, even if it links several times.
+            if entry
+                .wiki_links
+                .iter()
+                .any(|link| link == &target_stem || link == &target_rel)
+            {
+                results.push(BacklinkResult {
+                    from: entry.relative.clone(),
+                    context: format!("Page: {}", entry.title),
+                });
             }
         }
         results

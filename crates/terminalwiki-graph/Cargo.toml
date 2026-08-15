@@ -10,3 +10,4 @@ description = "TerminalWiki graph layer"
 terminalwiki-core = { workspace = true }
 serde = { workspace = true }
 unicode-width = { workspace = true }
+unicode-segmentation = { workspace = true }

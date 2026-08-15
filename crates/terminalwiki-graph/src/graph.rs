@@ -1,5 +1,5 @@
 //! Wiki link graph implementation.
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 
 /// Node types
@@ -104,6 +104,21 @@ impl WikiGraph {
     /// Format key for id_to_index map
     pub(crate) fn make_key(wiki: &str, relative: &Path) -> String {
         format!("{}:{}", wiki, relative.display())
+    }
+
+    /// All nodes, indexed by the indices used in [`SubGraph::nodes`].
+    pub fn nodes(&self) -> &[Node] {
+        &self.nodes
+    }
+
+    /// All edges, indexed by the indices used in [`SubGraph::edges`].
+    pub fn edges(&self) -> &[Edge] {
+        &self.edges
+    }
+
+    /// Returns the node at `idx`, or `None` if the index is out of range.
+    pub fn node(&self, idx: usize) -> Option<&Node> {
+        self.nodes.get(idx)
     }
 
     /// Build the graph from a set of entries.
@@ -223,23 +238,30 @@ impl WikiGraph {
     /// All pages that link TO this page
     pub fn backlinks(&self, wiki: &str, relative: &Path) -> Vec<BacklinkInfo> {
         let key = Self::make_key(wiki, relative);
-        if let Some(&idx) = self.id_to_index.get(&key) {
-            self.incoming[idx]
-                .iter()
-                .map(|&e| {
-                    let edge = &self.edges[e];
-                    let from_node = &self.nodes[edge.from];
-                    BacklinkInfo {
-                        from_wiki: from_node.id.wiki.clone(),
-                        from_relative: from_node.id.relative.clone(),
-                        from_title: from_node.title.clone(),
-                        context: String::new(), // Not implemented yet
-                    }
+        let Some(&idx) = self.id_to_index.get(&key) else {
+            return Vec::new();
+        };
+
+        // One backlink per linking page. A page that references the target
+        // several times is still a single source, and listing it repeatedly
+        // would both read as noise and inflate the backlink count.
+        let mut seen = HashSet::new();
+        self.incoming[idx]
+            .iter()
+            .filter_map(|&e| {
+                let edge = &self.edges[e];
+                if !seen.insert(edge.from) {
+                    return None;
+                }
+                let from_node = &self.nodes[edge.from];
+                Some(BacklinkInfo {
+                    from_wiki: from_node.id.wiki.clone(),
+                    from_relative: from_node.id.relative.clone(),
+                    from_title: from_node.title.clone(),
+                    context: String::new(), // Not implemented yet
                 })
-                .collect()
-        } else {
-            Vec::new()
-        }
+            })
+            .collect()
     }
 
     /// Broken links
@@ -260,6 +282,24 @@ impl WikiGraph {
 
     /// Neighborhood up to `depth` hops
     pub fn neighborhood(&self, wiki: &str, relative: &Path, depth: usize) -> SubGraph {
+        self.neighborhood_limited(wiki, relative, depth, usize::MAX)
+    }
+
+    /// Like [`WikiGraph::neighborhood`], but stops once `max_nodes` have been
+    /// collected.
+    ///
+    /// The traversal is breadth-first, so the cap keeps the nodes *nearest* the
+    /// centre and discards the outer fringe. Capping here rather than after
+    /// layout matters: the layout engine is O(n²) below its 200-node threshold,
+    /// so an uncapped hub neighbourhood would pay the full cost only to have the
+    /// result thrown away.
+    pub fn neighborhood_limited(
+        &self,
+        wiki: &str,
+        relative: &Path,
+        depth: usize,
+        max_nodes: usize,
+    ) -> SubGraph {
         let key = Self::make_key(wiki, relative);
         let center = match self.id_to_index.get(&key) {
             Some(&idx) => idx,
@@ -274,10 +314,12 @@ impl WikiGraph {
 
         let mut visited_nodes = HashSet::new();
         let mut visited_edges = HashSet::new();
-        let mut queue = vec![(center, 0)];
+        // A queue, not a stack: breadth-first order is what makes `max_nodes`
+        // keep the centre's nearest neighbours rather than one deep arm.
+        let mut queue = VecDeque::from([(center, 0usize)]);
         visited_nodes.insert(center);
 
-        while let Some((node_idx, current_depth)) = queue.pop() {
+        'outer: while let Some((node_idx, current_depth)) = queue.pop_front() {
             if current_depth >= depth {
                 continue;
             }
@@ -287,8 +329,11 @@ impl WikiGraph {
                 visited_edges.insert(edge_idx);
                 let edge = &self.edges[edge_idx];
                 if let Some(to) = edge.to {
+                    if visited_nodes.len() >= max_nodes {
+                        break 'outer;
+                    }
                     if visited_nodes.insert(to) {
-                        queue.push((to, current_depth + 1));
+                        queue.push_back((to, current_depth + 1));
                     }
                 }
             }
@@ -297,11 +342,21 @@ impl WikiGraph {
             for &edge_idx in &self.incoming[node_idx] {
                 visited_edges.insert(edge_idx);
                 let edge = &self.edges[edge_idx];
+                if visited_nodes.len() >= max_nodes {
+                    break 'outer;
+                }
                 if visited_nodes.insert(edge.from) {
-                    queue.push((edge.from, current_depth + 1));
+                    queue.push_back((edge.from, current_depth + 1));
                 }
             }
         }
+
+        // Drop edges whose endpoints did not survive the cap.
+        visited_edges.retain(|&e_idx| {
+            let edge = &self.edges[e_idx];
+            visited_nodes.contains(&edge.from)
+                && edge.to.is_none_or(|to| visited_nodes.contains(&to))
+        });
 
         let mut nodes: Vec<_> = visited_nodes.into_iter().collect();
         let mut edges: Vec<_> = visited_edges.into_iter().collect();

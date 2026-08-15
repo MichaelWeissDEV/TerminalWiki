@@ -81,6 +81,9 @@ pub fn draw(app: &App) -> std::io::Result<()> {
         Mode::Help => {
             draw_full_help(width, height, &mut out)?;
         }
+        Mode::Graph => {
+            draw_graph_view(app, width, height, &mut out)?;
+        }
         Mode::Normal | Mode::InPageSearch | Mode::Command => {
             draw_content_viewport(app, width, height, &mut out)?;
         }
@@ -398,17 +401,25 @@ fn draw_full_help(width: usize, height: usize, out: &mut std::io::Stdout) -> std
         ("k / Up", "Scroll up one line"),
         ("h / l", "Scroll left / right"),
         ("Ctrl+d / u", "Half-page down / up"),
-        ("g / G", "Jump to top / bottom"),
+        ("Home / G", "Jump to top / bottom"),
         ("Tab / S-Tab", "Cycle through links"),
         ("Enter", "Follow selected link / item"),
         ("f / Ctrl+p", "Fuzzy page finder"),
         ("o", "Document outline"),
         ("b", "Backlinks list"),
+        ("g", "Local knowledge graph"),
         (":", "Command palette"),
         ("e", "Edit current page in $EDITOR"),
         ("Ctrl+o / i", "Navigate backward / forward"),
         ("?", "Toggle this help view"),
         ("q / Esc", "Quit / Return to document"),
+        ("", ""),
+        ("In the graph", ""),
+        ("j / k / Tab", "Select node"),
+        ("Enter", "Open selected node"),
+        ("+ / -", "Increase / decrease depth"),
+        ("r", "Rebuild graph from index"),
+        ("Esc", "Back to article"),
     ];
 
     let view_height = height.saturating_sub(5);
@@ -423,6 +434,122 @@ fn draw_full_help(width: usize, height: usize, out: &mut std::io::Stdout) -> std
             ResetColor
         )?;
     }
+
+    Ok(())
+}
+
+/// Draws the interactive local graph (spec items 41-45).
+///
+/// The canvas is drawn plainly first, then the selected node's label is
+/// reprinted in place with accent styling. Restyling in place — rather than
+/// searching the rendered rows for the title — is what makes duplicate and
+/// truncated labels highlight correctly.
+fn draw_graph_view(
+    app: &App,
+    width: usize,
+    height: usize,
+    out: &mut std::io::Stdout,
+) -> std::io::Result<()> {
+    let Some(view) = app.graph_view.as_ref() else {
+        return Ok(());
+    };
+    let Some(graph) = app.graph_cache.as_ref() else {
+        return Ok(());
+    };
+
+    let header = format!(
+        "  Graph · {} · depth {}",
+        sanitize_line(&app.current_title),
+        view.depth
+    );
+    execute!(
+        out,
+        MoveTo(0, 2),
+        SetForegroundColor(CColor::White),
+        SetAttribute(Attribute::Bold),
+        Print(truncate_display_width(&header, width)),
+        SetAttribute(Attribute::Reset),
+        ResetColor
+    )?;
+    execute!(
+        out,
+        MoveTo(0, 3),
+        SetForegroundColor(CColor::DarkGrey),
+        Print("─".repeat(width)),
+        ResetColor
+    )?;
+
+    // Reserve the header (4 rows) and a summary line above the footer.
+    const CANVAS_TOP: usize = 4;
+    let canvas_height = height.saturating_sub(CANVAS_TOP + 2);
+    if canvas_height == 0 || width == 0 {
+        return Ok(());
+    }
+
+    let rendered =
+        terminalwiki_graph::render_graph(graph, &view.sub, &view.pos, width, canvas_height);
+
+    for (i, line) in rendered.lines.iter().enumerate() {
+        execute!(
+            out,
+            MoveTo(0, (CANVAS_TOP + i) as u16),
+            SetForegroundColor(CColor::DarkGrey),
+            Print(sanitize_line(line)),
+            ResetColor
+        )?;
+    }
+
+    // Highlight the selected node: accent + bold, no box (old Gate 7.6).
+    if let Some(selected_node) = view.selected_node() {
+        if let Some(p) = rendered.labels.iter().find(|p| p.node == selected_node) {
+            execute!(
+                out,
+                MoveTo(p.marker_col as u16, (CANVAS_TOP + p.row) as u16),
+                SetForegroundColor(CColor::Cyan),
+                SetAttribute(Attribute::Bold),
+                Print("◉"),
+                SetAttribute(Attribute::Reset),
+                ResetColor
+            )?;
+            if p.width > 0 {
+                execute!(
+                    out,
+                    MoveTo(p.col as u16, (CANVAS_TOP + p.row) as u16),
+                    SetForegroundColor(CColor::Cyan),
+                    SetAttribute(Attribute::Bold),
+                    SetAttribute(Attribute::Reverse),
+                    Print(sanitize_line(&p.text)),
+                    SetAttribute(Attribute::Reset),
+                    ResetColor
+                )?;
+            }
+        }
+    }
+
+    // Summary line: what is shown, and the selected node's identity.
+    let selected_title = view
+        .selected_node()
+        .and_then(|n| graph.node(n))
+        .map(|n| n.title.clone())
+        .unwrap_or_default();
+    let capped_note = if view.capped {
+        format!(" (capped at {})", view.sub.nodes.len())
+    } else {
+        String::new()
+    };
+    let summary = format!(
+        "  {} nodes{}   ▸ {}",
+        view.sub.nodes.len(),
+        capped_note,
+        sanitize_line(&selected_title)
+    );
+    execute!(
+        out,
+        MoveTo(0, (height - 2) as u16),
+        SetForegroundColor(CColor::DarkGrey),
+        Print(truncate_display_width(&summary, width)),
+        ResetColor
+    )?;
 
     Ok(())
 }

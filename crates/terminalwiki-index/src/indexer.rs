@@ -59,11 +59,6 @@ pub fn parse_markdown(content: &str) -> (Vec<String>, String, Vec<String>) {
                     body.push_str(text_str);
                     body.push(' ');
                 }
-
-                let found_links = find_links(text_str);
-                for (_, l) in found_links {
-                    links.push(l.raw);
-                }
             }
             Event::Code(code) => {
                 let code_str = code.as_ref();
@@ -71,6 +66,21 @@ pub fn parse_markdown(content: &str) -> (Vec<String>, String, Vec<String>) {
                 body.push(' ');
             }
             _ => {}
+        }
+    }
+
+    // Wiki links are scanned from the *whole* source, not per `Event::Text`.
+    //
+    // CommonMark parses `[[Heap]]` as a nested link reference and splits it
+    // across several text events, so a scanner run on individual fragments never
+    // sees a complete `[[...]]` span and silently found nothing — which left
+    // `wiki_links` empty and broke backlinks, related pages and the graph.
+    //
+    // The stored value is the resolved page name (`Heap`), which is what the
+    // graph resolves against, not the raw bracket text.
+    for (_, link) in find_links(content) {
+        if let terminalwiki_core::link::LinkTarget::Page { name, .. } = link.target {
+            links.push(name);
         }
     }
 
@@ -512,6 +522,48 @@ mod io_resilience_tests {
             delta.deleted_doc_ids.len(),
             1,
             "a file absent from disk must be deleted from the index"
+        );
+    }
+}
+
+#[cfg(test)]
+mod wiki_link_extraction_tests {
+    use super::*;
+
+    /// `[[Target]]` spans are split across pulldown text events, so scanning
+    /// per-event found nothing. Regression guard for backlinks/graph.
+    #[test]
+    fn extracts_wiki_links_from_markdown_body() {
+        let (_, _, links) = parse_markdown("# Heap\nSee [[Allocator]] and [[Stack|the stack]].\n");
+        assert!(
+            links.contains(&"Allocator".to_string()),
+            "plain wikilink not extracted: {links:?}"
+        );
+        assert!(
+            links.contains(&"Stack".to_string()),
+            "aliased wikilink must store the target, not the label: {links:?}"
+        );
+    }
+
+    #[test]
+    fn extracts_links_next_to_other_markdown() {
+        let (_, _, links) = parse_markdown(
+            "# T\n\n- item [[One]]\n\n> quote [[Two]]\n\n| a | b |\n|---|---|\n| [[Three]] | x |\n",
+        );
+        for expected in ["One", "Two", "Three"] {
+            assert!(
+                links.contains(&expected.to_string()),
+                "missing {expected} in {links:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ignores_unclosed_brackets() {
+        let (_, _, links) = parse_markdown("Text with [[Unclosed and nothing else.\n");
+        assert!(
+            links.is_empty(),
+            "unclosed link must not be indexed: {links:?}"
         );
     }
 }

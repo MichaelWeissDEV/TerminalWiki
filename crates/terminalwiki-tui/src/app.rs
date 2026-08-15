@@ -1,12 +1,13 @@
 //! TUI Application state and business logic (spec §40-§53).
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
 use terminalwiki_core::resolve;
 use terminalwiki_core::wiki::WikiSet;
 use terminalwiki_core::{Config, Error, Result};
-use terminalwiki_graph::{BacklinkInfo, GraphEntry, WikiGraph};
+use terminalwiki_graph::{BacklinkInfo, GraphEntry, LayoutEngine, SubGraph, WikiGraph};
 use terminalwiki_index::{FuzzyDataset, FuzzyHit, FuzzyItem};
 use terminalwiki_render::{
     detect_color_mode, render_markdown, render_path, ColorMode, RenderedDocument, RenderedHeading,
@@ -22,6 +23,41 @@ pub enum Mode {
     Backlinks,
     Command,
     Help,
+    Graph,
+}
+
+/// Default neighbourhood depth for the graph view (spec item 42).
+pub const GRAPH_DEFAULT_DEPTH: usize = 2;
+/// Hard ceiling on nodes fed to the layout engine.
+///
+/// The layout is O(n²) below its 200-node threshold, and a canvas of ordinary
+/// terminal size cannot legibly hold more than a few dozen labels anyway.
+pub const GRAPH_MAX_NODES: usize = 120;
+
+/// State of the interactive graph view.
+///
+/// The layout is computed once when the view opens or its depth changes; the
+/// canvas is re-rendered per frame from the cached positions, so a terminal
+/// resize costs a redraw rather than a re-layout.
+pub struct GraphViewState {
+    pub root_wiki: String,
+    pub root_path: PathBuf,
+    pub depth: usize,
+    pub sub: SubGraph,
+    pub pos: HashMap<usize, (f64, f64)>,
+    /// Selection domain: subgraph node indices ordered top-to-bottom,
+    /// left-to-right by layout position, so `j`/`k` move spatially.
+    pub ordered_nodes: Vec<usize>,
+    pub selected: usize,
+    /// Nodes in the neighbourhood before the cap was applied.
+    pub capped: bool,
+}
+
+impl GraphViewState {
+    /// The currently selected graph node index, if any.
+    pub fn selected_node(&self) -> Option<usize> {
+        self.ordered_nodes.get(self.selected).copied()
+    }
 }
 
 pub struct App<'a> {
@@ -68,6 +104,13 @@ pub struct App<'a> {
     // In-page search
     pub in_page_query: String,
     pub search_matches: Vec<usize>,
+
+    /// Whole-wiki link graph, built lazily and reused.
+    ///
+    /// Backlinks and the graph view both need it; rebuilding per keypress meant
+    /// walking every entry of every wiki on each `b` press.
+    pub graph_cache: Option<WikiGraph>,
+    pub graph_view: Option<GraphViewState>,
 
     pub status_message: Option<String>,
     pub should_quit: bool,
@@ -173,6 +216,8 @@ impl<'a> App<'a> {
             command_selected: 0,
             in_page_query: String::new(),
             search_matches: Vec::new(),
+            graph_cache: None,
+            graph_view: None,
             status_message: None,
             should_quit: false,
             should_suspend_for_editor: None,
@@ -394,6 +439,13 @@ impl<'a> App<'a> {
                     self.status_message = Some("No headings in current document".to_string());
                 }
             }
+            "graph" => {
+                let depth = parts
+                    .get(1)
+                    .and_then(|d| d.parse::<usize>().ok())
+                    .unwrap_or(GRAPH_DEFAULT_DEPTH);
+                self.open_graph_at_depth(depth.clamp(1, 5));
+            }
             "edit" => self.open_current_in_editor(),
             "reload" => {
                 let p = self.current_path.to_string_lossy().into_owned();
@@ -416,7 +468,13 @@ impl<'a> App<'a> {
         }
     }
 
-    pub fn load_backlinks(&mut self) {
+    /// Builds the whole-wiki graph once and keeps it.
+    ///
+    /// Invalidated by [`App::invalidate_graph`] when the underlying files change.
+    fn ensure_graph(&mut self) {
+        if self.graph_cache.is_some() {
+            return;
+        }
         let mut entries = Vec::new();
         for wiki in self.wikis.iter() {
             if let Ok(idx) = terminalwiki_index::WikiIndex::load(&wiki.name) {
@@ -437,9 +495,151 @@ impl<'a> App<'a> {
                 }
             }
         }
-        let graph = WikiGraph::from_entries(&entries);
-        self.backlinks = graph.backlinks(&self.current_wiki, &self.current_path);
+        self.graph_cache = Some(WikiGraph::from_entries(&entries));
+    }
+
+    /// Drops the cached graph so the next consumer rebuilds it.
+    pub fn invalidate_graph(&mut self) {
+        self.graph_cache = None;
+    }
+
+    pub fn load_backlinks(&mut self) {
+        self.ensure_graph();
+        if let Some(graph) = self.graph_cache.as_ref() {
+            self.backlinks = graph.backlinks(&self.current_wiki, &self.current_path);
+        }
         self.backlinks_selected = 0;
+    }
+
+    /// Opens the local graph around the current page (spec items 41-42).
+    pub fn open_graph(&mut self) {
+        let depth = self
+            .graph_view
+            .as_ref()
+            .map(|v| v.depth)
+            .unwrap_or(GRAPH_DEFAULT_DEPTH);
+        self.open_graph_at_depth(depth);
+    }
+
+    /// Recomputes the neighbourhood and layout at `depth` (spec item 7.10).
+    pub fn open_graph_at_depth(&mut self, depth: usize) {
+        if self.current_path.as_os_str().is_empty() {
+            self.status_message = Some("No page open to graph".to_string());
+            return;
+        }
+        self.ensure_graph();
+        let Some(graph) = self.graph_cache.as_ref() else {
+            self.status_message = Some("Graph unavailable".to_string());
+            return;
+        };
+
+        let uncapped = graph.neighborhood(&self.current_wiki, &self.current_path, depth);
+        if uncapped.nodes.is_empty() {
+            self.status_message =
+                Some("This page is not in the link graph (index may be stale)".to_string());
+            return;
+        }
+        let capped = uncapped.nodes.len() > GRAPH_MAX_NODES;
+        let sub = if capped {
+            graph.neighborhood_limited(
+                &self.current_wiki,
+                &self.current_path,
+                depth,
+                GRAPH_MAX_NODES,
+            )
+        } else {
+            uncapped
+        };
+
+        let pos = LayoutEngine::compute_layout(graph, &sub);
+
+        // Order the selection domain spatially so j/k reads as up/down.
+        let mut ordered_nodes = sub.nodes.clone();
+        ordered_nodes.sort_by(|a, b| {
+            let pa = pos.get(a).copied().unwrap_or((0.0, 0.0));
+            let pb = pos.get(b).copied().unwrap_or((0.0, 0.0));
+            pa.1.total_cmp(&pb.1)
+                .then(pa.0.total_cmp(&pb.0))
+                .then(a.cmp(b))
+        });
+        // Start on the page the user came from.
+        let selected = ordered_nodes
+            .iter()
+            .position(|&n| n == sub.center)
+            .unwrap_or(0);
+
+        self.graph_view = Some(GraphViewState {
+            root_wiki: self.current_wiki.clone(),
+            root_path: self.current_path.clone(),
+            depth,
+            sub,
+            pos,
+            ordered_nodes,
+            selected,
+            capped,
+        });
+        self.mode = Mode::Graph;
+        self.status_message = None;
+    }
+
+    /// Moves the graph selection by `delta`, saturating at both ends.
+    pub fn graph_select(&mut self, delta: isize) {
+        if let Some(view) = self.graph_view.as_mut() {
+            if view.ordered_nodes.is_empty() {
+                return;
+            }
+            let last = view.ordered_nodes.len() - 1;
+            let next = (view.selected as isize + delta).clamp(0, last as isize);
+            view.selected = next as usize;
+        }
+    }
+
+    /// Changes neighbourhood depth, reloading the surrounding nodes.
+    pub fn graph_change_depth(&mut self, delta: isize) {
+        let Some(view) = self.graph_view.as_ref() else {
+            return;
+        };
+        let new_depth = (view.depth as isize + delta).clamp(1, 5) as usize;
+        if new_depth == view.depth {
+            return;
+        }
+        self.open_graph_at_depth(new_depth);
+        if let Some(v) = self.graph_view.as_ref() {
+            self.status_message = Some(format!("Graph depth {}", v.depth));
+        }
+    }
+
+    /// Opens the selected graph node as a page or code file (spec items 44-45).
+    pub fn graph_open_selected(&mut self) {
+        let Some(view) = self.graph_view.as_ref() else {
+            return;
+        };
+        let Some(node_idx) = view.selected_node() else {
+            return;
+        };
+        let Some(graph) = self.graph_cache.as_ref() else {
+            return;
+        };
+        let Some(node) = graph.node(node_idx) else {
+            return;
+        };
+
+        let wiki = node.id.wiki.clone();
+        let relative = node.id.relative.to_string_lossy().into_owned();
+
+        // Leaving the graph before loading keeps history semantics identical to
+        // following a link from the article view.
+        self.mode = Mode::Normal;
+        self.graph_view = None;
+        if let Err(e) = self.load_page(&wiki, &relative, true) {
+            self.status_message = Some(format!("Could not open node: {e}"));
+        }
+    }
+
+    /// Closes the graph and returns to the article.
+    pub fn close_graph(&mut self) {
+        self.graph_view = None;
+        self.mode = Mode::Normal;
     }
 
     pub fn open_current_in_editor(&mut self) {

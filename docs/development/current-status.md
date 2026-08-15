@@ -26,7 +26,7 @@ in "Baseline". No row is asserted from expectation.
 |---|---|---|
 | `cargo fmt --all -- --check` | 0 | PASS — no diffs |
 | `cargo check --workspace --all-targets --all-features` | 0 | PASS — 0 errors, 0 warnings |
-| `cargo test --workspace --all-features` | 0 | PASS — **186 passed, 0 failed** |
+| `cargo test --workspace --all-features` | 0 | PASS — **196 passed, 0 failed** |
 | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | 0 | PASS — 0 warnings |
 | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps` | 0 | PASS — 0 warnings |
 | `cargo build --release --workspace` | 0 | PASS — release binary produced |
@@ -39,10 +39,11 @@ in "Baseline". No row is asserted from expectation.
 |---|---|
 | `terminalwiki-core` (lib) | 152 |
 | `terminalwiki-render` (lib) | 16 |
-| `terminalwiki-index` (lib) | 7 |
-| `terminalwiki-graph` (`tests/graph_tests.rs`) | 6 |
+| `terminalwiki-index` (lib) | 13 |
+| `terminalwiki-graph` (`tests/graph_tests.rs`) | 8 |
 | `terminalwiki` (`tests/integration_tests.rs`) | 5 |
-| **Total** | **186** |
+| `terminalwiki-tui` (`tests/graph_view_tests.rs`) | 5 |
+| **Total** | **196** |
 
 Binary and doc-test targets report 0 tests and are omitted.
 
@@ -170,6 +171,82 @@ the next one in a `.txt` file. `render_path` therefore routes Markdown through
 Tests cover: the stripped case, the no-frontmatter case, a mid-document `---`
 rule (content, must survive), and the same bytes rendered as `.md` versus `.txt`.
 
+### Wiki links were never indexed — the bug behind broken backlinks and graph
+
+Found while writing the graph-view tests: the neighbourhood of a page that
+plainly links to three others contained **one** node.
+
+`indexer::parse_markdown` called `find_links` **per `Event::Text`**. `find_links`
+is a raw-text scanner that needs a complete `[[...]]` span, but CommonMark splits
+that span across several text events — so it matched nothing and `wiki_links` was
+always empty. Verified against the real index before the fix:
+
+```
+Allocator.md -> []
+Heap.md      -> []          # this file contains [[Allocator]] twice
+```
+
+Because every consumer reads `wiki_links`, this silently broke **backlinks,
+outgoing links, related pages, and the entire graph** — all four are Definition
+of Done items that appeared to work only because they degrade to "nothing found"
+rather than failing loudly.
+
+Fixed by scanning the whole document once and storing the resolved page name
+(`Heap`), which is what the graph resolves against, rather than the raw bracket
+text. Verified end to end:
+
+```
+$ tw links Heap        →  Outgoing links from 'Heap.md' (2)
+$ tw backlinks Allocator →  Pages linking to 'Allocator.md'
+$ tw related Heap      →  smoke:Allocator.md · score 20.0 (Direct link)
+```
+
+Backlinks are now also deduplicated per source page: a page that links to the
+target three times is one backlink, not three, which otherwise inflated the
+count shown in the article header.
+
+### Interactive graph view (priority 1 of the supplementary spec)
+
+`Mode::Graph` added to the TUI, using `terminalwiki-graph` — no second graph
+implementation. `g` and `:graph` both open the local graph of the current page at
+depth 2; `j`/`k`/`Tab` select, `Enter` opens the node (pushing history exactly
+like following a link), `+`/`-` change depth, `r` rebuilds, `Esc` returns, `?`
+lists the keys.
+
+`:graph` was previously in the command list and autocompleted, but had no match
+arm — it reported "Unknown command: graph". It is now wired to the same entry
+point as `g`.
+
+Supporting changes:
+
+- **The graph is cached on `App`.** `load_backlinks` rebuilt the entire
+  `WikiGraph` — walking every entry of every wiki — on *every* `b` press. It is
+  now built once, lazily, and shared with the graph view.
+- **`neighborhood_limited`** caps nodes during a breadth-first traversal, so the
+  cap keeps the centre's nearest neighbours and bounds the O(n²) layout input
+  rather than discarding work after the fact. Edges whose endpoints do not
+  survive the cap are dropped.
+- **`render_graph` now returns `GraphRender`** — the canvas plus a
+  `LabelPlacement` per node. Selection cannot be implemented by searching the
+  rendered rows for the title, because duplicate and truncated labels make that
+  ambiguous.
+- **Unicode-correct canvas.** Labels were measured with `char` count, so a CJK or
+  emoji title shifted its whole row and skewed every edge through it. Labels are
+  now measured with `display_width`, drawn by grapheme, and wide graphemes
+  reserve a continuation cell. A test asserts every canvas row is exactly the
+  requested display width for `Heap`, `Größe`, `日本語`, and `🦀 Rust`.
+- Labels may overwrite edge glyphs but never another label, so nodes no longer
+  render as an unlabelled bare marker when a line passes behind them.
+
+`g` previously meant "scroll to top"; per supplementary spec item 101 it now
+opens the graph, and `Home` remains scroll-to-top. The help screen reflects this.
+
+Tested by `crates/terminalwiki-tui/tests/graph_view_tests.rs` (5 tests: open and
+centre selection, selection clamping, Enter-opens-node plus history, depth change
+and clamping, `:graph` wiring, cache reuse and invalidation). These build a real
+wiki and index with `TW_CACHE_DIR` pointed at a temp directory, so they never
+touch the developer's cache.
+
 ### Gate 1 — Version coherence
 
 `crates/terminalwiki-cli/src/lib.rs` printed a **hardcoded** `"terminalwiki 0.1.0"`
@@ -193,8 +270,9 @@ current tree and the RC Definition of Done.
 | 3 | Search query semantics (`title_exact`, phrase, path, `type:`, negation) | Not started |
 | 4 | Structured search snippets (currently HTML-ish string handling) | Not started |
 | 5 | Fuzzy search consolidation on Nucleo | Partially present |
-| 6 | Graph CLI scaling (thresholds, `--max-nodes`, TTY size, Unicode width) | Not started |
-| 7 | **Graph TUI** (`Mode::Graph`, background layout, generation IDs) | **Not started** — no `Mode::Graph` exists |
+| 6 | Graph CLI scaling | **Partly done** — node cap and Unicode-correct label widths landed with the graph view. Still open: `tw graph` with no page still materialises the whole graph, `--max-nodes` is not a CLI flag, and width still comes from `COLUMNS` rather than the real TTY size. |
+| 7 | Graph TUI — view, selection, navigation, depth | **Done** (see above) |
+| 7.11-7.13 | Graph background layout, generation IDs, cancellation | **Deferred, deliberately** — the layout is computed once per open (not per frame) and is milliseconds once the graph is cached, so the cost was never the layout. The event-loop restructuring a worker needs is the same one the file watcher requires; doing it once there avoids touching graph code twice. |
 | 8 | **File watcher integration into the TUI** | **Not started** — `watch.rs` exists in core but the TUI never constructs a watcher |
 | 9 | Terminal capability layer (pixel size, mouse, tmux, SSH) | `caps.rs` has the protocol enum only |
 | 10 | **Native image rendering** (kitty / iTerm2 / sixel / unicode backends) | **Not started** — only a `GraphicsProtocol` enum and config plumbing; no backend renders anything |

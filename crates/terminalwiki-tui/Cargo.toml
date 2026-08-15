@@ -13,3 +13,6 @@ terminalwiki-render = { workspace = true }
 terminalwiki-graph = { workspace = true }
 crossterm = { workspace = true }
 unicode-width = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

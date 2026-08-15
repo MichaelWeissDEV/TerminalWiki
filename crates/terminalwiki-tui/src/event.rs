@@ -35,6 +35,7 @@ fn handle_key_event(app: &mut App, key: KeyEvent) -> Result<()> {
         Mode::Command => handle_command_key(app, key),
         Mode::Help => handle_help_key(app, key),
         Mode::InPageSearch => handle_search_key(app, key),
+        Mode::Graph => handle_graph_key(app, key),
     }
 }
 
@@ -64,8 +65,13 @@ fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<()> {
         (KeyModifiers::CONTROL, KeyCode::Char('u')) => {
             app.scroll_up(view_h / 2);
         }
-        (KeyModifiers::NONE, KeyCode::Char('g')) | (KeyModifiers::NONE, KeyCode::Home) => {
+        // `g` opens the graph (spec item 101). Scroll-to-top remains on Home;
+        // the older `g`-as-top binding is superseded.
+        (KeyModifiers::NONE, KeyCode::Home) => {
             app.scroll = 0;
+        }
+        (KeyModifiers::NONE, KeyCode::Char('g')) => {
+            app.open_graph();
         }
         (KeyModifiers::NONE, KeyCode::Char('G')) | (KeyModifiers::NONE, KeyCode::End) => {
             app.scroll = app.lines.len().saturating_sub(view_h);
@@ -317,6 +323,50 @@ fn handle_search_key(app: &mut App, key: KeyEvent) -> Result<()> {
         }
         KeyCode::Char(c) => {
             app.in_page_query.push(c);
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Graph view keys (spec items 44-45, old Gate 7.7).
+fn handle_graph_key(app: &mut App, key: KeyEvent) -> Result<()> {
+    match (key.modifiers, key.code) {
+        (_, KeyCode::Esc) | (KeyModifiers::NONE, KeyCode::Char('q')) => {
+            app.close_graph();
+        }
+        (KeyModifiers::NONE, KeyCode::Char('j')) | (KeyModifiers::NONE, KeyCode::Down) => {
+            app.graph_select(1);
+        }
+        (KeyModifiers::NONE, KeyCode::Char('k')) | (KeyModifiers::NONE, KeyCode::Up) => {
+            app.graph_select(-1);
+        }
+        // Tab cycles in the same spatial order as j/k.
+        (KeyModifiers::NONE, KeyCode::Tab) => {
+            app.graph_select(1);
+        }
+        (KeyModifiers::SHIFT, KeyCode::BackTab) | (KeyModifiers::NONE, KeyCode::BackTab) => {
+            app.graph_select(-1);
+        }
+        (KeyModifiers::NONE, KeyCode::Enter) => {
+            app.graph_open_selected();
+        }
+        (KeyModifiers::NONE, KeyCode::Char('+')) | (KeyModifiers::NONE, KeyCode::Char('=')) => {
+            app.graph_change_depth(1);
+        }
+        (KeyModifiers::NONE, KeyCode::Char('-')) => {
+            app.graph_change_depth(-1);
+        }
+        (KeyModifiers::NONE, KeyCode::Char('r')) => {
+            let depth = app.graph_view.as_ref().map(|v| v.depth);
+            if let Some(d) = depth {
+                app.invalidate_graph();
+                app.open_graph_at_depth(d);
+                app.status_message = Some("Graph reloaded".to_string());
+            }
+        }
+        (KeyModifiers::NONE, KeyCode::Char('?')) => {
+            app.mode = Mode::Help;
         }
         _ => {}
     }

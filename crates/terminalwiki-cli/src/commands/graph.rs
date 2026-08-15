@@ -114,9 +114,9 @@ pub fn graph(
     let height = 24;
 
     let pos = LayoutEngine::compute_layout(&g, &sub);
-    let lines = render_graph(&g, &sub, &pos, width, height);
+    let rendered = render_graph(&g, &sub, &pos, width, height);
 
-    for line in lines {
+    for line in rendered.lines {
         println!("{}", line);
     }
 
