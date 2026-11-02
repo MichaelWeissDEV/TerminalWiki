@@ -26,6 +26,9 @@ pub enum LinkTarget {
     },
     External(String),
     Heading(String),
+    /// An Obsidian-style `#tag` in the page body. Following it filters the
+    /// finder to pages carrying that tag.
+    Tag(String),
 }
 
 /// A rendered link with visual position and target.
@@ -73,6 +76,8 @@ pub enum Inline {
         target: String,
         label: Option<String>,
     },
+    /// Obsidian-style `#tag` text.
+    Tag(String),
     /// Obsidian-style `==highlighted==` text.
     Highlight(Vec<Inline>),
     Footnote(String),
@@ -83,6 +88,7 @@ impl Inline {
     pub fn plain_text(&self) -> String {
         match self {
             Inline::Text(t) | Inline::Code(t) | Inline::Footnote(t) | Inline::Math(t) => t.clone(),
+            Inline::Tag(tag) => format!("#{tag}"),
             Inline::Bold(inner)
             | Inline::Italic(inner)
             | Inline::Strike(inner)

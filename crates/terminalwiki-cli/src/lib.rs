@@ -60,7 +60,7 @@ fn print_help() {
     println!("  tw PAGE            display a page");
     println!("  tw search QUERY    search the knowledge base");
     println!("  tw find QUERY      fuzzy-find a page");
-    println!("  tw tui             open the interactive interface");
+    println!("  tw tui             open the interactive TUI (aliases: tw ui, tw -i)");
     println!("  tw init [NAME]     initialize and register the current directory as a wiki");
     println!("  tw new PAGE        create a new page");
     println!("  tw edit PAGE       edit a page in your editor");
@@ -75,6 +75,7 @@ fn print_help() {
     println!("  tw doctor          check system configuration");
     println!("  tw stats           show wiki statistics\n");
     println!("OPTIONS");
+    println!("  -i, --interactive  open the interactive TUI");
     println!("  --wiki NAME        use a specific wiki");
     println!("  --plain            plain text output");
     println!("  --json             JSON output");

@@ -127,6 +127,7 @@ impl Args {
     pub fn parse(args: &[String]) -> Result<Self, String> {
         let mut parsed = Args::default();
         let mut positional = Vec::new();
+        let mut force_tui = false;
         let mut i = 1;
 
         while i < args.len() {
@@ -142,6 +143,7 @@ impl Args {
                     "--pager" => parsed.pager = true,
                     "--version" => parsed.version = true,
                     "--help" => parsed.help = true,
+                    "--interactive" | "--tui" => force_tui = true,
                     "--force" => positional.push(arg.clone()), // handled per command later
                     "--default" => positional.push(arg.clone()),
                     _ if arg.starts_with("--wiki=") => {
@@ -196,6 +198,8 @@ impl Args {
             } else if arg.starts_with("-") && arg != "-" {
                 if arg == "-h" {
                     parsed.help = true;
+                } else if arg == "-i" {
+                    force_tui = true;
                 } else {
                     positional.push(arg.clone());
                 }
@@ -206,6 +210,25 @@ impl Args {
         }
 
         if parsed.help || parsed.version {
+            return Ok(parsed);
+        }
+
+        if force_tui {
+            let wiki = parsed.wiki.clone().or_else(|| {
+                if positional.len() >= 2 {
+                    Some(positional[0].clone())
+                } else {
+                    None
+                }
+            });
+            let page = if positional.len() == 1 {
+                Some(positional[0].clone())
+            } else if positional.len() >= 2 {
+                Some(positional[1].clone())
+            } else {
+                None
+            };
+            parsed.command = Command::Tui { wiki, page };
             return Ok(parsed);
         }
 
@@ -225,8 +248,8 @@ impl Args {
                     page: positional[1].clone(),
                 };
             }
-            "tui" => {
-                let mut wiki = None;
+            "tui" | "ui" | "interactive" => {
+                let mut wiki = parsed.wiki.clone();
                 let mut page = None;
                 if positional.len() == 2 {
                     page = Some(positional[1].clone());

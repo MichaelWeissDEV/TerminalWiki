@@ -1,22 +1,26 @@
 //! Rendering semantic Document AST into terminal Spans and RenderedLines (spec §55, §60).
 
 use std::collections::HashMap;
+use std::path::Path;
 
 use terminalwiki_core::link::heading_anchor;
-use terminalwiki_core::unicode::{display_width, pad_display_width};
+use terminalwiki_core::unicode::display_width;
 
 use crate::ansi::{ColorMode, Style};
+use crate::diagram::{is_diagram_language, render_diagram_block};
 use crate::document::{
     Block, Document, Inline, LinkTarget, RenderedDocument, RenderedHeading, RenderedLink, Span,
 };
 use crate::highlight::highlight;
+use crate::image_view::render_inline_image;
 use crate::math::layout_math;
 use crate::theme::{SemanticColor, Theme};
 
 pub struct Renderer<'a> {
     max_content_width: usize,
     theme: &'a Theme,
-    _color_mode: ColorMode,
+    color_mode: ColorMode,
+    base_dir: Option<&'a Path>,
 }
 
 impl<'a> Renderer<'a> {
@@ -24,8 +28,14 @@ impl<'a> Renderer<'a> {
         Self {
             max_content_width: max_content_width.max(40),
             theme,
-            _color_mode: color_mode,
+            color_mode,
+            base_dir: None,
         }
+    }
+
+    pub fn with_base_dir(mut self, base_dir: Option<&'a Path>) -> Self {
+        self.base_dir = base_dir;
+        self
     }
 
     pub fn render_document(&self, doc: &Document) -> RenderedDocument {
@@ -143,6 +153,21 @@ impl<'a> Renderer<'a> {
             }
 
             Block::CodeBlock { language, content } => {
+                if let Some(lang) = language.as_deref() {
+                    if is_diagram_language(Some(lang)) {
+                        if let Some(diag_lines) = render_diagram_block(
+                            lang,
+                            content,
+                            &indent,
+                            self.max_content_width,
+                            self.theme,
+                        ) {
+                            rdoc.lines.extend(diag_lines);
+                            return;
+                        }
+                    }
+                }
+
                 // Header bar
                 let lang_label = language.as_deref().unwrap_or("code");
                 rdoc.lines.push(vec![
@@ -321,10 +346,16 @@ impl<'a> Renderer<'a> {
 
             Block::Image { alt, url } => {
                 if is_image_asset(url) {
-                    rdoc.lines.push(vec![Span {
-                        text: format!("{indent}[image: {alt} ({url})]"),
-                        style: self.theme.style(SemanticColor::Muted).italic(),
-                    }]);
+                    let img_lines = render_inline_image(
+                        self.base_dir,
+                        alt,
+                        url,
+                        &indent,
+                        self.max_content_width,
+                        self.theme,
+                        self.color_mode,
+                    );
+                    rdoc.lines.extend(img_lines);
                 } else {
                     // pulldown-cmark maps Obsidian `![[Note#Heading]]` to an
                     // image event. A non-image destination is therefore a
@@ -469,6 +500,19 @@ impl<'a> Renderer<'a> {
                         style: self.theme.style(SemanticColor::Link).bold(),
                     });
                 }
+                Inline::Tag(tag) => {
+                    let display = format!("#{tag}");
+                    marks.push(LinkMark {
+                        start: start_column,
+                        end: start_column + display_width(&display),
+                        target: LinkTarget::Tag(tag.clone()),
+                        label: display.clone(),
+                    });
+                    spans.push(Span {
+                        text: display,
+                        style: self.theme.style(SemanticColor::Link).italic(),
+                    });
+                }
                 Inline::Footnote(f) => {
                     spans.push(Span {
                         text: f.clone(),
@@ -560,6 +604,7 @@ impl<'a> Renderer<'a> {
         indent_level: usize,
     ) {
         let indent = "  ".repeat(indent_level);
+        let indent_w = display_width(&indent);
         let num_cols = headers
             .len()
             .max(rows.iter().map(|r| r.len()).max().unwrap_or(0));
@@ -567,75 +612,149 @@ impl<'a> Renderer<'a> {
             return;
         }
 
-        // Calculate column widths
-        let mut col_widths = vec![4usize; num_cols];
-        for (i, h) in headers.iter().enumerate() {
-            let w = display_width(&h.iter().map(|in_l| in_l.plain_text()).collect::<String>());
-            col_widths[i] = col_widths[i].max(w);
-        }
-        for row in rows {
-            for (i, cell) in row.iter().enumerate() {
-                if i < num_cols {
-                    let w = display_width(
-                        &cell
-                            .iter()
-                            .map(|in_l| in_l.plain_text())
-                            .collect::<String>(),
-                    );
-                    col_widths[i] = col_widths[i].max(w);
+        // Pre-render inline runs for headers and cells so widths and link marks match
+        let rendered_headers: Vec<(Vec<Span>, Vec<LinkMark>, usize)> = (0..num_cols)
+            .map(|i| {
+                if let Some(h) = headers.get(i) {
+                    let (mut spans, marks) = self.inline_runs(h);
+                    let heading_style = self.theme.style(SemanticColor::Heading).bold();
+                    for s in &mut spans {
+                        if s.style == self.theme.style(SemanticColor::Foreground) {
+                            s.style = heading_style.clone();
+                        } else {
+                            s.style.bold = true;
+                        }
+                    }
+                    let w: usize = spans.iter().map(|s| display_width(&s.text)).sum();
+                    (spans, marks, w)
+                } else {
+                    (Vec::new(), Vec::new(), 0)
                 }
+            })
+            .collect();
+
+        let rendered_rows: Vec<Vec<(Vec<Span>, Vec<LinkMark>, usize)>> = rows
+            .iter()
+            .map(|row| {
+                (0..num_cols)
+                    .map(|i| {
+                        if let Some(cell) = row.get(i) {
+                            let (spans, marks) = self.inline_runs(cell);
+                            let w: usize = spans.iter().map(|s| display_width(&s.text)).sum();
+                            (spans, marks, w)
+                        } else {
+                            (Vec::new(), Vec::new(), 0)
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+
+        let mut col_widths = vec![4usize; num_cols];
+        for (i, (_, _, w)) in rendered_headers.iter().enumerate() {
+            col_widths[i] = col_widths[i].max(*w);
+        }
+        for row in &rendered_rows {
+            for (i, (_, _, w)) in row.iter().enumerate() {
+                col_widths[i] = col_widths[i].max(*w);
             }
         }
 
-        // Render header row
-        let mut header_spans = vec![Span {
-            text: indent.clone(),
-            style: Style::new(),
-        }];
-        for (i, h) in headers.iter().enumerate() {
-            let plain = h.iter().map(|in_l| in_l.plain_text()).collect::<String>();
-            let padded = pad_display_width(&plain, col_widths[i] + 2);
-            header_spans.push(Span {
-                text: padded,
-                style: self.theme.style(SemanticColor::Heading).bold(),
-            });
-        }
-        rdoc.lines.push(header_spans);
+        let border_style = self.theme.style(SemanticColor::Muted);
 
-        // Separator rule
-        let total_rule_len: usize = col_widths.iter().map(|w| w + 2).sum();
+        // Top border: ┌───┬───┐
+        let top_segments: Vec<String> = col_widths.iter().map(|w| "─".repeat(*w + 2)).collect();
         rdoc.lines.push(vec![
             Span {
                 text: indent.clone(),
                 style: Style::new(),
             },
             Span {
-                text: "─".repeat(total_rule_len),
-                style: self.theme.style(SemanticColor::Muted),
+                text: format!("┌{}┐", top_segments.join("┬")),
+                style: border_style.clone(),
             },
         ]);
 
-        // Render data rows
-        for row in rows {
-            let mut row_spans = vec![Span {
+        // Header row: │ Col1 │ Col2 │
+        self.push_table_row(&rendered_headers, &col_widths, &indent, indent_w, rdoc);
+
+        // Middle separator: ├───┼───┤
+        let mid_segments: Vec<String> = col_widths.iter().map(|w| "─".repeat(*w + 2)).collect();
+        rdoc.lines.push(vec![
+            Span {
                 text: indent.clone(),
                 style: Style::new(),
-            }];
-            for (i, cell) in row.iter().enumerate() {
-                if i < num_cols {
-                    let plain = cell
-                        .iter()
-                        .map(|in_l| in_l.plain_text())
-                        .collect::<String>();
-                    let padded = pad_display_width(&plain, col_widths[i] + 2);
-                    row_spans.push(Span {
-                        text: padded,
-                        style: self.theme.style(SemanticColor::Foreground),
-                    });
-                }
-            }
-            rdoc.lines.push(row_spans);
+            },
+            Span {
+                text: format!("├{}┤", mid_segments.join("┼")),
+                style: border_style.clone(),
+            },
+        ]);
+
+        // Data rows
+        for row in &rendered_rows {
+            self.push_table_row(row, &col_widths, &indent, indent_w, rdoc);
         }
+
+        // Bottom border: └───┴───┘
+        let bot_segments: Vec<String> = col_widths.iter().map(|w| "─".repeat(*w + 2)).collect();
+        rdoc.lines.push(vec![
+            Span {
+                text: indent,
+                style: Style::new(),
+            },
+            Span {
+                text: format!("└{}┘", bot_segments.join("┴")),
+                style: border_style,
+            },
+        ]);
+    }
+
+    fn push_table_row(
+        &self,
+        cells: &[(Vec<Span>, Vec<LinkMark>, usize)],
+        col_widths: &[usize],
+        indent: &str,
+        indent_w: usize,
+        rdoc: &mut RenderedDocument,
+    ) {
+        let border_style = self.theme.style(SemanticColor::Muted);
+        let line_idx = rdoc.lines.len();
+        let mut row_spans = vec![
+            Span {
+                text: indent.to_string(),
+                style: Style::new(),
+            },
+            Span {
+                text: "│".to_string(),
+                style: border_style.clone(),
+            },
+        ];
+        let mut col_offset = indent_w + 1;
+
+        for (i, (spans, marks, cell_w)) in cells.iter().enumerate() {
+            let target_w = col_widths[i];
+            row_spans.push(Span {
+                text: " ".to_string(),
+                style: Style::new(),
+            });
+            col_offset += 1;
+
+            self.register_marks_on_line(rdoc, line_idx, col_offset, marks);
+            row_spans.extend(spans.iter().cloned());
+
+            let pad = target_w.saturating_sub(*cell_w);
+            row_spans.push(Span {
+                text: " ".repeat(pad + 1),
+                style: Style::new(),
+            });
+            row_spans.push(Span {
+                text: "│".to_string(),
+                style: border_style.clone(),
+            });
+            col_offset += target_w + 2;
+        }
+        rdoc.lines.push(row_spans);
     }
 }
 

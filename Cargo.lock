@@ -1373,7 +1373,6 @@ dependencies = [
  "terminalwiki-core",
  "terminalwiki-graph",
  "terminalwiki-index",
- "terminalwiki-latex",
  "terminalwiki-render",
  "terminalwiki-tui",
  "toml",
@@ -1423,17 +1422,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "terminalwiki-latex"
-version = "0.1.0-alpha"
-dependencies = [
- "terminalwiki-core",
- "terminalwiki-render",
-]
-
-[[package]]
 name = "terminalwiki-render"
 version = "0.1.0-alpha"
 dependencies = [
+ "flate2",
  "once_cell",
  "pulldown-cmark",
  "syntect",

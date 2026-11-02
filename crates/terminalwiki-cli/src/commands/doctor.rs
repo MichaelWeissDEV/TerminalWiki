@@ -68,5 +68,17 @@ pub fn doctor(_args: Args, config: Config, wikis: WikiSet) -> Result<()> {
     let editor = crate::editor::resolve_editor(&config);
     println!("Editor            {}", sanitize_line(&editor));
 
+    // External LaTeX engines
+    let latex_engines: Vec<&str> = terminalwiki_render::latex::detect_latex_engines()
+        .into_iter()
+        .map(|e| e.binary_name())
+        .collect();
+    let latex_status = if latex_engines.is_empty() {
+        "builtin markdown/math renderer (no external TeX engine on PATH)".to_string()
+    } else {
+        latex_engines.join(", ")
+    };
+    println!("LaTeX engines     {}", sanitize_line(&latex_status));
+
     Ok(())
 }

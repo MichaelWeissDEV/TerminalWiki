@@ -3,9 +3,11 @@
 pub mod ansi;
 pub mod binary;
 pub mod code_view;
+pub mod diagram;
 pub mod document;
 pub mod highlight;
 pub mod image_view;
+pub mod latex;
 pub mod markdown;
 pub mod math;
 pub mod plain;
@@ -20,7 +22,7 @@ pub use document::{
     Block, Document, Inline, LinkTarget, RenderedDocument, RenderedHeading, RenderedLine,
     RenderedLink, Span,
 };
-pub use image_view::render_image_info;
+pub use image_view::{render_image_info, render_image_with_mode};
 pub use markdown::parse_markdown;
 pub use math::MathRenderer;
 pub use plain::PlainRenderer;
@@ -99,21 +101,43 @@ pub fn render_path(
                 .unwrap_or(0);
             render_binary_info(path, len, mtime)
         }
-        ContentType::Image => render_image_info(path, bytes, theme),
-        ContentType::Code | ContentType::Latex => {
+        ContentType::Image => render_image_with_mode(path, bytes, theme, color_mode),
+        ContentType::Code => {
             let text = String::from_utf8_lossy(bytes);
             let lang = terminalwiki_core::filetype::language_for(path);
             render_code_file(&text, lang, path, config, theme, color_mode, None)
         }
+        ContentType::Latex => {
+            let text = String::from_utf8_lossy(bytes);
+            let is_tex_doc = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case("tex") || e.eq_ignore_ascii_case("latex"));
+            if is_tex_doc {
+                latex::render_latex(Some(path), &text, config, theme, color_mode)
+            } else {
+                render_code_file(&text, Some("LaTeX"), path, config, theme, color_mode, None)
+            }
+        }
         ContentType::Markdown => {
             let text = String::from_utf8_lossy(bytes);
-            render_markdown(&text, config, theme, color_mode)
+            let fm = terminalwiki_core::frontmatter::Frontmatter::parse(&text);
+            let body = text.get(fm.body_offset..).unwrap_or(&text);
+            let doc = markdown::parse_markdown(body);
+            let renderer =
+                render::Renderer::new(config.render.max_content_width, theme, color_mode)
+                    .with_base_dir(path.parent());
+            renderer.render_document(&doc)
         }
         // Plain text is rendered with the markdown renderer for convenience, but
         // it is not a wiki page — a leading `---` is content, not frontmatter.
         ContentType::Text => {
             let text = String::from_utf8_lossy(bytes);
-            render_markdown_raw(&text, config, theme, color_mode)
+            let doc = markdown::parse_markdown(&text);
+            let renderer =
+                render::Renderer::new(config.render.max_content_width, theme, color_mode)
+                    .with_base_dir(path.parent());
+            renderer.render_document(&doc)
         }
     }
 }
@@ -275,6 +299,33 @@ mod frontmatter_render_tests {
             .take(link.end_column - link.start_column)
             .collect();
         assert_eq!(cells, "[[Target]]", "wrong hitbox in line {plain:?}");
+    }
+
+    #[test]
+    fn body_tags_become_clickable_links() {
+        let doc = render_markdown_raw(
+            "See #rust and #project/web.\n",
+            &Config::default(),
+            &Theme::Mono,
+            ColorMode::Never,
+        );
+        let targets: Vec<&LinkTarget> = doc.links.iter().map(|link| &link.target).collect();
+        assert_eq!(
+            targets,
+            [
+                &LinkTarget::Tag("rust".into()),
+                &LinkTarget::Tag("project/web".into())
+            ]
+        );
+        let plain: String = doc.lines[0].iter().map(|span| span.text.as_str()).collect();
+        assert!(plain.contains("#rust"), "{plain}");
+        let first = &doc.links[0];
+        let cells: String = plain
+            .chars()
+            .skip(first.start_column)
+            .take(first.end_column - first.start_column)
+            .collect();
+        assert_eq!(cells, "#rust");
     }
 
     #[test]

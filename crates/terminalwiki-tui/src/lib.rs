@@ -101,36 +101,63 @@ fn build_watcher(wikis: &WikiSet) -> Option<WikiWatcher> {
 }
 
 fn open_editor_subprocess(path: &PathBuf, config: &Config) -> Result<()> {
-    let editor = config
+    let explicit_editor = config
         .editor
         .as_ref()
         .filter(|s| !s.is_empty())
         .cloned()
         .or_else(|| std::env::var("TW_EDITOR").ok().filter(|s| !s.is_empty()))
         .or_else(|| std::env::var("VISUAL").ok().filter(|s| !s.is_empty()))
-        .or_else(|| std::env::var("EDITOR").ok().filter(|s| !s.is_empty()))
-        .unwrap_or_else(|| "nvim".to_string());
+        .or_else(|| std::env::var("EDITOR").ok().filter(|s| !s.is_empty()));
 
-    let parts = parse_command_argv(&editor)?;
-    if parts.is_empty() {
-        return Err(terminalwiki_core::Error::other("Editor is empty"));
+    let candidates: Vec<String> = if let Some(ed) = explicit_editor {
+        vec![ed]
+    } else {
+        vec![
+            "nvim".to_string(),
+            "vim".to_string(),
+            "vi".to_string(),
+            "nano".to_string(),
+        ]
+    };
+
+    let mut last_err = None;
+    for candidate in candidates {
+        let parts = parse_command_argv(&candidate)?;
+        if parts.is_empty() {
+            continue;
+        }
+        let mut cmd = std::process::Command::new(&parts[0]);
+        for arg in &parts[1..] {
+            cmd.arg(arg);
+        }
+        cmd.arg(path);
+
+        match cmd.status() {
+            Ok(status) => {
+                if !status.success() {
+                    return Err(terminalwiki_core::Error::other(format!(
+                        "Editor exited with code: {status}"
+                    )));
+                }
+                return Ok(());
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                last_err = Some(e);
+                continue;
+            }
+            Err(e) => {
+                return Err(terminalwiki_core::Error::other(format!(
+                    "Failed to spawn editor: {e}"
+                )));
+            }
+        }
     }
 
-    let mut cmd = std::process::Command::new(&parts[0]);
-    for arg in &parts[1..] {
-        cmd.arg(arg);
-    }
-    cmd.arg(path);
-
-    let status = cmd
-        .status()
-        .map_err(|e| terminalwiki_core::Error::other(format!("Failed to spawn editor: {e}")))?;
-
-    if !status.success() {
-        return Err(terminalwiki_core::Error::other(format!(
-            "Editor exited with code: {status}"
-        )));
-    }
-
-    Ok(())
+    Err(terminalwiki_core::Error::other(format!(
+        "Failed to spawn editor: {}",
+        last_err
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "No editor found".to_string())
+    )))
 }

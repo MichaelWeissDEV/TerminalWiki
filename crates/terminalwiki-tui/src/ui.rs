@@ -11,7 +11,7 @@ use crossterm::terminal::{size as terminal_size, Clear, ClearType};
 use terminalwiki_core::sanitize::sanitize_line;
 use terminalwiki_core::unicode::{display_width, pad_display_width, truncate_display_width};
 
-use crate::app::{App, Mode};
+use crate::app::{App, Mode, SidebarMode, ViewLayout};
 
 pub fn draw(app: &App) -> std::io::Result<()> {
     let (cols, rows) = terminal_size()?;
@@ -68,9 +68,42 @@ pub fn draw(app: &App) -> std::io::Result<()> {
     )?;
 
     // ─── 2. Viewport / Inline Views ───────────────────────────────────────────────
+    let in_article_mode = matches!(
+        app.mode,
+        Mode::Normal
+            | Mode::InPageSearch
+            | Mode::Command
+            | Mode::Sidebar
+            | Mode::NewPage
+            | Mode::TagPrompt
+    );
+
+    let show_left_sidebar = in_article_mode
+        && width >= 50
+        && match app.layout_mode {
+            ViewLayout::Zen => false,
+            ViewLayout::Wikipedia => true,
+            ViewLayout::Standard => app.sidebar_visible,
+        };
+    let sidebar_width = if show_left_sidebar {
+        (width / 4).clamp(20, 30)
+    } else {
+        0
+    };
+
+    let inspector_width =
+        if in_article_mode && app.layout_mode == ViewLayout::Wikipedia && width >= 90 {
+            (width / 4).clamp(22, 32)
+        } else {
+            0
+        };
+
     match app.mode {
         Mode::Finder => {
             draw_inline_finder(app, width, height, &mut out)?;
+        }
+        Mode::WikiSearch => {
+            draw_inline_wiki_search(app, width, height, &mut out)?;
         }
         Mode::Outline => {
             draw_inline_outline(app, width, height, &mut out)?;
@@ -84,11 +117,51 @@ pub fn draw(app: &App) -> std::io::Result<()> {
         Mode::Graph => {
             draw_graph_view(app, width, height, &mut out)?;
         }
-        Mode::Normal | Mode::InPageSearch | Mode::Command if app.page_missing => {
-            draw_missing_page(app, width, &mut out)?;
+        Mode::Normal
+        | Mode::InPageSearch
+        | Mode::Command
+        | Mode::Sidebar
+        | Mode::NewPage
+        | Mode::TagPrompt
+            if app.page_missing =>
+        {
+            if sidebar_width > 0 {
+                draw_sidebar(app, sidebar_width, height, &mut out)?;
+            }
+            draw_missing_page(
+                app,
+                sidebar_width,
+                width.saturating_sub(sidebar_width + inspector_width),
+                &mut out,
+            )?;
         }
-        Mode::Normal | Mode::InPageSearch | Mode::Command => {
-            draw_content_viewport(app, width, height, &mut out)?;
+        Mode::Normal
+        | Mode::InPageSearch
+        | Mode::Command
+        | Mode::Sidebar
+        | Mode::NewPage
+        | Mode::TagPrompt => {
+            if sidebar_width > 0 {
+                draw_sidebar(app, sidebar_width, height, &mut out)?;
+            }
+            let avail_w = width.saturating_sub(sidebar_width + inspector_width);
+            let (content_x, content_w) = if app.layout_mode == ViewLayout::Zen && avail_w > 86 {
+                let target_w = 80;
+                let margin = (avail_w - target_w) / 2;
+                (sidebar_width + margin, target_w)
+            } else {
+                (sidebar_width, avail_w)
+            };
+            draw_content_viewport(app, content_x, content_w, height, &mut out)?;
+            if inspector_width > 0 {
+                draw_wikipedia_inspector(
+                    app,
+                    width.saturating_sub(inspector_width),
+                    inspector_width,
+                    height,
+                    &mut out,
+                )?;
+            }
         }
     }
 
@@ -104,10 +177,67 @@ pub fn draw(app: &App) -> std::io::Result<()> {
             )?;
         }
         Mode::InPageSearch => {
+            let match_info = if app.in_page_query.is_empty() {
+                "type to search in page".to_string()
+            } else if app.search_matches.is_empty() {
+                "0 matches".to_string()
+            } else {
+                format!(
+                    "{}/{} matches (↑/↓/Tab cycle, Enter jump)",
+                    app.search_match_idx + 1,
+                    app.search_matches.len()
+                )
+            };
+            let prompt = format!(" /{}█   {}", app.in_page_query, match_info);
             execute!(
                 out,
                 SetForegroundColor(CColor::Yellow),
-                Print(format!(" /{}█", app.in_page_query)),
+                Print(truncate_display_width(&prompt, width)),
+                ResetColor
+            )?;
+        }
+        Mode::TagPrompt => {
+            let prompt = format!(" #{}█   Enter add tag to page   Esc cancel", app.tag_input);
+            execute!(
+                out,
+                SetForegroundColor(CColor::Cyan),
+                Print(truncate_display_width(&prompt, width)),
+                ResetColor
+            )?;
+        }
+        Mode::NewPage => {
+            let prompt = format!(
+                " + {}█   Tab template: {}   Enter create   Ctrl+E edit in $EDITOR   Esc cancel",
+                app.new_page_name,
+                app.new_page_template.label()
+            );
+            execute!(
+                out,
+                SetForegroundColor(CColor::Yellow),
+                Print(truncate_display_width(&prompt, width)),
+                ResetColor
+            )?;
+        }
+        Mode::Sidebar => {
+            let left_text = if let Some(ref msg) = app.status_message {
+                format!("  {msg}")
+            } else {
+                "  s hide · v tree/list · j/k select · Enter open · Esc read · Ctrl+P quick bar"
+                    .to_string()
+            };
+            let right_text = format!("{}  ", app.current_wiki);
+            let left_w = display_width(&left_text);
+            let right_w = display_width(&right_text);
+            let foot_pad = width.saturating_sub(left_w + right_w);
+            execute!(
+                out,
+                SetForegroundColor(CColor::DarkGrey),
+                Print(truncate_display_width(
+                    &left_text,
+                    width.saturating_sub(right_w)
+                )),
+                Print(" ".repeat(foot_pad)),
+                Print(&right_text),
                 ResetColor
             )?;
         }
@@ -115,7 +245,11 @@ pub fn draw(app: &App) -> std::io::Result<()> {
             let left_text = if let Some(ref msg) = app.status_message {
                 format!("  {msg}")
             } else {
-                format!("  {}", app.current_path.display())
+                format!(
+                    "  {}  [{} · Ctrl+P quick bar · Ctrl+F find · Ctrl+W search · Q quicknote]",
+                    app.current_path.display(),
+                    app.layout_mode.label()
+                )
             };
             let right_text = format!("{}  ", app.current_wiki);
 
@@ -126,7 +260,10 @@ pub fn draw(app: &App) -> std::io::Result<()> {
             execute!(
                 out,
                 SetForegroundColor(CColor::DarkGrey),
-                Print(&left_text),
+                Print(truncate_display_width(
+                    &left_text,
+                    width.saturating_sub(right_w)
+                )),
                 Print(" ".repeat(foot_pad)),
                 Print(&right_text),
                 ResetColor
@@ -140,18 +277,25 @@ pub fn draw(app: &App) -> std::io::Result<()> {
 
 fn draw_content_viewport(
     app: &App,
+    x: usize,
     width: usize,
     height: usize,
     out: &mut std::io::Stdout,
 ) -> std::io::Result<()> {
     let content_height = height.saturating_sub(3);
+    let active_link = app.selected_link_idx.and_then(|idx| app.links.get(idx));
+    let search_q_lower = app.in_page_query.trim().to_lowercase();
+
     for row in 0..content_height {
         let line_idx = app.scroll + row;
-        execute!(out, MoveTo(0, (row + 2) as u16))?;
+        execute!(out, MoveTo(x as u16, (row + 2) as u16))?;
 
         if let Some(line) = app.lines.get(line_idx) {
             let mut current_col = 0;
             let mut skipped_cols = 0;
+            let mut abs_col = 0;
+            let line_has_search_match =
+                !search_q_lower.is_empty() && app.search_matches.binary_search(&line_idx).is_ok();
 
             for span in line {
                 if current_col >= width {
@@ -159,6 +303,9 @@ fn draw_content_viewport(
                 }
                 let span_text = sanitize_line(&span.text);
                 let text_w = display_width(&span_text);
+                let span_start = abs_col;
+                let span_end = abs_col + text_w;
+                abs_col = span_end;
 
                 // Horizontal scroll offset handling
                 if skipped_cols + text_w <= app.h_scroll {
@@ -174,19 +321,309 @@ fn draw_content_viewport(
                     span_text
                 };
 
+                let mut style = span.style.clone();
+                if let Some(link) = active_link {
+                    if link.line == line_idx
+                        && span_start < link.end_column
+                        && span_end > link.start_column
+                    {
+                        style = style.bold().reverse();
+                    }
+                }
+                if line_has_search_match && visible_text.to_lowercase().contains(&search_q_lower) {
+                    style = style.bold().reverse();
+                }
+
                 let vis_w = display_width(&visible_text);
                 if current_col + vis_w > width {
                     let available = width.saturating_sub(current_col);
                     let truncated = truncate_display_width(&visible_text, available);
-                    execute!(out, Print(&span.style.apply(&truncated)))?;
+                    execute!(out, Print(&style.apply(&truncated)))?;
                     current_col += available;
                 } else {
-                    execute!(out, Print(&span.style.apply(&visible_text)))?;
+                    execute!(out, Print(&style.apply(&visible_text)))?;
                     current_col += vis_w;
                 }
             }
         }
     }
+    Ok(())
+}
+
+fn draw_sidebar(
+    app: &App,
+    width: usize,
+    height: usize,
+    out: &mut std::io::Stdout,
+) -> std::io::Result<()> {
+    let items = app.fuzzy_dataset.items();
+    let header_label = match app.sidebar_mode {
+        SidebarMode::Flat => format!("  Pages ({})", items.len()),
+        SidebarMode::Tree => format!("  Vault Tree ({})", items.len()),
+    };
+    execute!(
+        out,
+        MoveTo(0, 2),
+        SetForegroundColor(CColor::White),
+        SetAttribute(Attribute::Bold),
+        Print(pad_display_width(&header_label, width.saturating_sub(1))),
+        SetAttribute(Attribute::Reset),
+        ResetColor
+    )?;
+    execute!(
+        out,
+        MoveTo(0, 3),
+        SetForegroundColor(CColor::DarkGrey),
+        Print("─".repeat(width.saturating_sub(1))),
+        ResetColor
+    )?;
+
+    let list_top = 4usize;
+    let list_height = height.saturating_sub(list_top + 2);
+    let mut start = app.sidebar_selected.saturating_sub(list_height / 2);
+    if start + list_height > items.len() {
+        start = items.len().saturating_sub(list_height);
+    }
+
+    for (offset, item) in items.iter().skip(start).take(list_height).enumerate() {
+        let index = start + offset;
+        let selected = app.mode == Mode::Sidebar && index == app.sidebar_selected;
+        let current = item.wiki == app.current_wiki && item.relative == app.current_path;
+        let marker = if current { "▸ " } else { "  " };
+        let display_entry = match app.sidebar_mode {
+            SidebarMode::Flat => {
+                let title = if item.title.is_empty() {
+                    item.relative.to_string_lossy().into_owned()
+                } else {
+                    item.title.clone()
+                };
+                format!("{marker}{title}")
+            }
+            SidebarMode::Tree => {
+                let parent = item
+                    .relative
+                    .parent()
+                    .and_then(|p| (!p.as_os_str().is_empty()).then(|| p.to_string_lossy()));
+                let stem = item
+                    .relative
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| item.title.clone());
+                if let Some(dir) = parent {
+                    format!("{marker}📁 {dir}/{stem}")
+                } else {
+                    format!("{marker}📄 {stem}")
+                }
+            }
+        };
+        let line = truncate_display_width(&display_entry, width.saturating_sub(2));
+
+        execute!(out, MoveTo(0, (list_top + offset) as u16))?;
+        if selected {
+            execute!(
+                out,
+                SetForegroundColor(CColor::Cyan),
+                SetAttribute(Attribute::Bold),
+                SetAttribute(Attribute::Reverse),
+                Print(pad_display_width(&line, width.saturating_sub(1))),
+                SetAttribute(Attribute::Reset),
+                ResetColor
+            )?;
+        } else if current {
+            execute!(
+                out,
+                SetForegroundColor(CColor::White),
+                SetAttribute(Attribute::Bold),
+                Print(line),
+                SetAttribute(Attribute::Reset),
+                ResetColor
+            )?;
+        } else {
+            execute!(
+                out,
+                SetForegroundColor(CColor::Grey),
+                Print(line),
+                ResetColor
+            )?;
+        }
+    }
+
+    // A subtle divider keeps the article column visually separate.
+    for row in 2..height.saturating_sub(1) {
+        execute!(
+            out,
+            MoveTo((width.saturating_sub(1)) as u16, row as u16),
+            SetForegroundColor(CColor::DarkGrey),
+            Print("│"),
+            ResetColor
+        )?;
+    }
+
+    Ok(())
+}
+
+fn draw_wikipedia_inspector(
+    app: &App,
+    x: usize,
+    width: usize,
+    height: usize,
+    out: &mut std::io::Stdout,
+) -> std::io::Result<()> {
+    // Left border of inspector pane
+    for row in 2..height.saturating_sub(1) {
+        execute!(
+            out,
+            MoveTo(x as u16, row as u16),
+            SetForegroundColor(CColor::DarkGrey),
+            Print("│"),
+            ResetColor
+        )?;
+    }
+
+    let inner_x = (x + 2) as u16;
+    let inner_w = width.saturating_sub(3);
+    if inner_w < 8 {
+        return Ok(());
+    }
+
+    execute!(
+        out,
+        MoveTo(inner_x, 2),
+        SetForegroundColor(CColor::White),
+        SetAttribute(Attribute::Bold),
+        Print(truncate_display_width("Contents & Links", inner_w)),
+        SetAttribute(Attribute::Reset),
+        ResetColor
+    )?;
+    execute!(
+        out,
+        MoveTo((x + 1) as u16, 3),
+        SetForegroundColor(CColor::DarkGrey),
+        Print("─".repeat(width.saturating_sub(1))),
+        ResetColor
+    )?;
+
+    let max_rows = height.saturating_sub(6);
+    let mut row_cursor = 4usize;
+
+    // 1. Outline / TOC section
+    if !app.headings.is_empty() && row_cursor < 4 + max_rows {
+        execute!(
+            out,
+            MoveTo(inner_x, row_cursor as u16),
+            SetForegroundColor(CColor::Cyan),
+            SetAttribute(Attribute::Bold),
+            Print(truncate_display_width(
+                &format!("§ Outline ({})", app.headings.len()),
+                inner_w
+            )),
+            SetAttribute(Attribute::Reset),
+            ResetColor
+        )?;
+        row_cursor += 1;
+
+        for h in app.headings.iter().take(max_rows / 2) {
+            if row_cursor >= 4 + max_rows {
+                break;
+            }
+            let indent = " ".repeat(h.level.saturating_sub(1));
+            let line = truncate_display_width(&format!("{indent}• {}", h.text), inner_w);
+            execute!(
+                out,
+                MoveTo(inner_x, row_cursor as u16),
+                SetForegroundColor(CColor::Grey),
+                Print(line),
+                ResetColor
+            )?;
+            row_cursor += 1;
+        }
+        row_cursor += 1;
+    }
+
+    // 2. Backlinks section
+    if row_cursor < 4 + max_rows {
+        execute!(
+            out,
+            MoveTo(inner_x, row_cursor as u16),
+            SetForegroundColor(CColor::Cyan),
+            SetAttribute(Attribute::Bold),
+            Print(truncate_display_width(
+                &format!("← Backlinks ({})", app.backlinks.len()),
+                inner_w
+            )),
+            SetAttribute(Attribute::Reset),
+            ResetColor
+        )?;
+        row_cursor += 1;
+
+        if app.backlinks.is_empty() {
+            if row_cursor < 4 + max_rows {
+                execute!(
+                    out,
+                    MoveTo(inner_x, row_cursor as u16),
+                    SetForegroundColor(CColor::DarkGrey),
+                    Print(truncate_display_width("(none)", inner_w)),
+                    ResetColor
+                )?;
+                row_cursor += 1;
+            }
+        } else {
+            for b in &app.backlinks {
+                if row_cursor >= 4 + max_rows {
+                    break;
+                }
+                let line = truncate_display_width(&format!("• {}", b.from_title), inner_w);
+                execute!(
+                    out,
+                    MoveTo(inner_x, row_cursor as u16),
+                    SetForegroundColor(CColor::White),
+                    Print(line),
+                    ResetColor
+                )?;
+                row_cursor += 1;
+            }
+        }
+        row_cursor += 1;
+    }
+
+    // 3. Outgoing links section
+    if row_cursor < 4 + max_rows {
+        execute!(
+            out,
+            MoveTo(inner_x, row_cursor as u16),
+            SetForegroundColor(CColor::Cyan),
+            SetAttribute(Attribute::Bold),
+            Print(truncate_display_width(
+                &format!("→ Links ({})", app.links.len()),
+                inner_w
+            )),
+            SetAttribute(Attribute::Reset),
+            ResetColor
+        )?;
+        row_cursor += 1;
+
+        for (idx, link) in app.links.iter().enumerate() {
+            if row_cursor >= 4 + max_rows {
+                break;
+            }
+            let active = app.selected_link_idx == Some(idx);
+            let prefix = if idx < 9 {
+                format!("[{}] ", idx + 1)
+            } else {
+                "• ".to_string()
+            };
+            let line = truncate_display_width(&format!("{prefix}{}", link.label), inner_w);
+            execute!(
+                out,
+                MoveTo(inner_x, row_cursor as u16),
+                SetForegroundColor(if active { CColor::Cyan } else { CColor::Grey }),
+                Print(line),
+                ResetColor
+            )?;
+            row_cursor += 1;
+        }
+    }
+
     Ok(())
 }
 
@@ -196,7 +633,16 @@ fn draw_inline_finder(
     height: usize,
     out: &mut std::io::Stdout,
 ) -> std::io::Result<()> {
-    // Top inline search prompt
+    let hint = if app.finder_is_command_mode() {
+        "Command Palette (Enter to run · Esc to close)  "
+    } else {
+        "Quick Bar (#tag filter · > commands)  "
+    };
+    let left_prompt = format!("  > {}█", app.finder_query);
+    let left_w = display_width(&left_prompt);
+    let hint_w = display_width(hint);
+    let pad = width.saturating_sub(left_w + hint_w);
+
     execute!(
         out,
         MoveTo(0, 2),
@@ -205,6 +651,9 @@ fn draw_inline_finder(
         SetForegroundColor(CColor::White),
         Print(&app.finder_query),
         Print("█"),
+        Print(" ".repeat(pad)),
+        SetForegroundColor(CColor::DarkGrey),
+        Print(hint),
         ResetColor
     )?;
     execute!(
@@ -217,6 +666,56 @@ fn draw_inline_finder(
 
     let list_height = height.saturating_sub(5);
     let start_idx = app.finder_selected.saturating_sub(list_height / 2);
+
+    if app.finder_is_command_mode() {
+        for (i, cmd) in app
+            .finder_commands
+            .iter()
+            .skip(start_idx)
+            .take(list_height)
+            .enumerate()
+        {
+            let is_selected = start_idx + i == app.finder_selected;
+            execute!(out, MoveTo(0, (4 + i) as u16))?;
+
+            let meta = format!("[{}]", cmd.shortcut);
+            let meta_w = display_width(&meta);
+            let label = format!("{} — {}", cmd.title, cmd.description);
+
+            if is_selected {
+                let display = truncate_display_width(
+                    &format!("  > {label}"),
+                    width.saturating_sub(meta_w + 4),
+                );
+                let padded = pad_display_width(&display, width.saturating_sub(meta_w + 4));
+                execute!(
+                    out,
+                    SetForegroundColor(CColor::Cyan),
+                    SetAttribute(Attribute::Bold),
+                    Print(&padded),
+                    SetAttribute(Attribute::Reset),
+                    SetForegroundColor(CColor::Yellow),
+                    Print(format!("{meta}  ")),
+                    ResetColor
+                )?;
+            } else {
+                let display = truncate_display_width(
+                    &format!("    {label}"),
+                    width.saturating_sub(meta_w + 4),
+                );
+                let padded = pad_display_width(&display, width.saturating_sub(meta_w + 4));
+                execute!(
+                    out,
+                    SetForegroundColor(CColor::White),
+                    Print(&padded),
+                    SetForegroundColor(CColor::DarkGrey),
+                    Print(format!("{meta}  ")),
+                    ResetColor
+                )?;
+            }
+        }
+        return Ok(());
+    }
 
     for (i, hit) in app
         .finder_filtered
@@ -261,6 +760,95 @@ fn draw_inline_finder(
                 Print(&padded),
                 SetForegroundColor(CColor::DarkGrey),
                 Print(format!("{meta}  ")),
+                ResetColor
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
+fn draw_inline_wiki_search(
+    app: &App,
+    width: usize,
+    height: usize,
+    out: &mut std::io::Stdout,
+) -> std::io::Result<()> {
+    let right_hint = format!("{} hits (Enter to open)  ", app.wiki_search_hits.len());
+    let left_prompt = format!("  🔎 Wiki Search: {}█", app.wiki_search_query);
+    let pad = width.saturating_sub(display_width(&left_prompt) + display_width(&right_hint));
+
+    execute!(
+        out,
+        MoveTo(0, 2),
+        SetForegroundColor(CColor::Yellow),
+        SetAttribute(Attribute::Bold),
+        Print("  🔎 Wiki Search: "),
+        SetAttribute(Attribute::Reset),
+        SetForegroundColor(CColor::White),
+        Print(&app.wiki_search_query),
+        Print("█"),
+        Print(" ".repeat(pad)),
+        SetForegroundColor(CColor::DarkGrey),
+        Print(&right_hint),
+        ResetColor
+    )?;
+    execute!(
+        out,
+        MoveTo(0, 3),
+        SetForegroundColor(CColor::DarkGrey),
+        Print("─".repeat(width)),
+        ResetColor
+    )?;
+
+    let list_height = height.saturating_sub(5);
+    let start_idx = app.wiki_search_selected.saturating_sub(list_height / 2);
+
+    for (i, hit) in app
+        .wiki_search_hits
+        .iter()
+        .skip(start_idx)
+        .take(list_height)
+        .enumerate()
+    {
+        let is_selected = start_idx + i == app.wiki_search_selected;
+        execute!(out, MoveTo(0, (4 + i) as u16))?;
+
+        let meta = format!(
+            "{}:{}:{}",
+            hit.wiki,
+            hit.relative.display(),
+            hit.line_number
+        );
+        let meta_w = display_width(&meta);
+        let max_body_w = width.saturating_sub(meta_w + 6);
+        let combined = if hit.snippet.is_empty() {
+            hit.title.clone()
+        } else {
+            format!("{} — {}", hit.title, hit.snippet)
+        };
+        let prefix = if is_selected { "  > " } else { "    " };
+        let display = truncate_display_width(&format!("{prefix}{combined}"), max_body_w);
+        let padded = pad_display_width(&display, max_body_w);
+
+        if is_selected {
+            execute!(
+                out,
+                SetForegroundColor(CColor::Cyan),
+                SetAttribute(Attribute::Bold),
+                Print(&padded),
+                SetAttribute(Attribute::Reset),
+                SetForegroundColor(CColor::Yellow),
+                Print(format!("  {meta}  ")),
+                ResetColor
+            )?;
+        } else {
+            execute!(
+                out,
+                SetForegroundColor(CColor::White),
+                Print(&padded),
+                SetForegroundColor(CColor::DarkGrey),
+                Print(format!("  {meta}  ")),
                 ResetColor
             )?;
         }
@@ -400,29 +988,47 @@ fn draw_full_help(width: usize, height: usize, out: &mut std::io::Stdout) -> std
     )?;
 
     let help_lines = [
-        ("j / Down", "Scroll down one line"),
-        ("k / Up", "Scroll up one line"),
-        ("h / l", "Scroll left / right"),
+        ("j / k / Up / Down", "Scroll down / up one line"),
+        ("h / l / Left / Right", "Scroll left / right"),
         ("Ctrl+d / u", "Half-page down / up"),
         ("Home / G", "Jump to top / bottom"),
-        ("Tab / S-Tab", "Cycle through links"),
-        ("Enter", "Follow selected link / item"),
-        ("f / Ctrl+p", "Fuzzy page finder"),
-        ("o", "Document outline"),
-        ("b", "Backlinks list"),
-        ("g", "Local knowledge graph"),
-        (":", "Command palette"),
-        ("e", "Edit current page in $EDITOR"),
-        ("Ctrl+o / i", "Navigate backward / forward"),
-        ("?", "Toggle this help view"),
-        ("q / Esc", "Quit / Return to document"),
-        ("", ""),
-        ("In the graph", ""),
-        ("j / k / Tab", "Select node"),
-        ("Enter", "Open selected node"),
-        ("+ / -", "Increase / decrease depth"),
-        ("r", "Rebuild graph from index"),
-        ("Esc", "Back to article"),
+        (
+            "Tab / S-Tab / ] / [",
+            "Cycle through links (highlighted in article)",
+        ),
+        (
+            "1..9 / Enter",
+            "Quick-jump link 1..9 / follow selected link",
+        ),
+        (
+            "Ctrl+p / f",
+            "VS Code Quick Bar (pages, #tag filter, > commands)",
+        ),
+        (">", "Open Quick Bar directly in Command Palette mode"),
+        ("Ctrl+f / /", "Live in-page search (F3 / Ctrl+g next match)"),
+        (
+            "Ctrl+w",
+            "Wiki-wide full-text search (words & sentence parts)",
+        ),
+        ("Ctrl+n / Q", "Quick Note in QuickNotes/ (opens nvim/vim)"),
+        ("n / T", "New page / new todo list (Ctrl+e opens editor)"),
+        ("t", "Add #tag to current page"),
+        ("e", "Edit current page in $EDITOR (nvim/vim)"),
+        ("z", "Toggle Zen distraction-free reading mode"),
+        (
+            "w",
+            "Toggle Wikipedia 3-pane layout (Vault + Article + TOC)",
+        ),
+        ("s / v", "Toggle sidebar / switch Vault Tree vs Flat list"),
+        (
+            "o / b / g",
+            "Document outline / Backlinks / Knowledge graph",
+        ),
+        (
+            "Ctrl+o / i / Bksp",
+            "Navigate backward / forward in history",
+        ),
+        (": / ? / q", "Command line / Help / Quit"),
     ];
 
     let view_height = height.saturating_sub(5);
@@ -561,7 +1167,12 @@ fn draw_graph_view(
 ///
 /// Deliberately plain text with no box: the article area keeps its typography
 /// even when it has nothing to show.
-fn draw_missing_page(app: &App, width: usize, out: &mut std::io::Stdout) -> std::io::Result<()> {
+fn draw_missing_page(
+    app: &App,
+    x: usize,
+    width: usize,
+    out: &mut std::io::Stdout,
+) -> std::io::Result<()> {
     let path = sanitize_line(&app.current_path.to_string_lossy());
     let lines = [
         String::new(),
@@ -579,7 +1190,7 @@ fn draw_missing_page(app: &App, width: usize, out: &mut std::io::Stdout) -> std:
     for (i, line) in lines.iter().enumerate() {
         execute!(
             out,
-            MoveTo(0, (i + 2) as u16),
+            MoveTo(x as u16, (i + 2) as u16),
             SetForegroundColor(CColor::DarkGrey),
             Print(truncate_display_width(line, width)),
             ResetColor

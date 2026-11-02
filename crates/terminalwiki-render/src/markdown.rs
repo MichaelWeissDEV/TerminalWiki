@@ -739,7 +739,7 @@ fn parse_wiki_links_in_text(text: &str, inlines: &mut Vec<Inline>) {
     while let Some(start) = text[cursor..].find("[[") {
         let abs_start = cursor + start;
         if abs_start > cursor {
-            inlines.push(Inline::Text(text[cursor..abs_start].to_string()));
+            push_text_with_tags(&text[cursor..abs_start], inlines);
         }
         if let Some(end) = text[abs_start + 2..].find("]]") {
             let abs_end = abs_start + 2 + end;
@@ -757,14 +757,73 @@ fn parse_wiki_links_in_text(text: &str, inlines: &mut Vec<Inline>) {
             }
             cursor = abs_end + 2;
         } else {
-            inlines.push(Inline::Text(text[abs_start..].to_string()));
+            push_text_with_tags(&text[abs_start..], inlines);
             cursor = text.len();
             break;
         }
     }
     if cursor < text.len() {
-        inlines.push(Inline::Text(text[cursor..].to_string()));
+        push_text_with_tags(&text[cursor..], inlines);
     }
+}
+
+/// Splits a plain-text run into text and Obsidian `#tag` pieces.
+///
+/// Tags may contain letters, digits, `_`, `-` and `/` (nested tags). A `#`
+/// glued to a preceding word character is not a tag, which keeps fragments
+/// such as `C#` and URL anchors like `/docs#setup` as plain text.
+fn push_text_with_tags(text: &str, inlines: &mut Vec<Inline>) {
+    let mut text_start = 0;
+    let mut scan = 0;
+    while let Some(relative) = text[scan..].find('#') {
+        let start = scan + relative;
+        let previous = text[..start].chars().next_back();
+        if previous.is_some_and(is_tag_word_char) {
+            scan = start + 1;
+            continue;
+        }
+
+        let mut end = start + 1;
+        for (index, character) in text[end..].char_indices() {
+            let first = index == 0;
+            let valid = if first {
+                character.is_alphabetic() || character == '_'
+            } else {
+                character.is_alphanumeric()
+                    || character == '_'
+                    || character == '-'
+                    || character == '/'
+            };
+            if !valid {
+                break;
+            }
+            end += character.len_utf8();
+        }
+
+        let tag = text[start + 1..end].trim_end_matches(['-', '/']);
+        if tag.is_empty() {
+            scan = start + 1;
+            continue;
+        }
+
+        if start > text_start {
+            inlines.push(Inline::Text(text[text_start..start].to_string()));
+        }
+        inlines.push(Inline::Tag(tag.to_string()));
+        text_start = start + 1 + tag.len();
+        scan = text_start;
+    }
+    if text_start < text.len() {
+        inlines.push(Inline::Text(text[text_start..].to_string()));
+    }
+}
+
+fn is_tag_word_char(character: char) -> bool {
+    character.is_alphanumeric()
+        || character == '_'
+        || character == '-'
+        || character == '/'
+        || character == '#'
 }
 
 #[cfg(test)]
@@ -886,6 +945,36 @@ mod tests {
             }
             other => panic!("expected paragraph, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parses_obsidian_tags_and_ignores_word_fragments() {
+        let doc = parse_markdown("See #rust and #project/web, C# and /docs#setup.\n");
+        match &doc.blocks[0] {
+            Block::Paragraph(inlines) => {
+                let tags: Vec<&str> = inlines
+                    .iter()
+                    .filter_map(|inline| match inline {
+                        Inline::Tag(tag) => Some(tag.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(tags, ["rust", "project/web"]);
+                let text = inlines
+                    .iter()
+                    .map(|inline| inline.plain_text())
+                    .collect::<String>();
+                assert!(text.contains("C# and /docs#setup."), "{text}");
+            }
+            other => panic!("expected paragraph, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tags_are_not_parsed_inside_code() {
+        let doc = parse_markdown("`#code` and ``#also-code``\n");
+        let rendered = format!("{doc:?}");
+        assert!(!rendered.contains("Inline::Tag"), "{rendered}");
     }
 
     #[test]

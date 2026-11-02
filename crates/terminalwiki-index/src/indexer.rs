@@ -7,12 +7,13 @@ use std::path::{Path, PathBuf};
 
 use ignore::WalkBuilder;
 use rayon::prelude::*;
-use terminalwiki_core::config::Config;
+use terminalwiki_core::config::{Config, WIKI_CONFIG_FILE};
 use terminalwiki_core::error::{Error, Result};
 use terminalwiki_core::filetype::{classify, looks_binary, ContentType};
 use terminalwiki_core::frontmatter::Frontmatter;
 use terminalwiki_core::link::find_links;
 use terminalwiki_core::sanitize::sanitize_text;
+use terminalwiki_core::scan::IGNORE_FILE;
 use terminalwiki_core::wiki::Wiki;
 
 use crate::entry::{
@@ -93,6 +94,153 @@ pub fn parse_markdown(content: &str) -> (Vec<String>, String, Vec<String>) {
     (headings, body, links)
 }
 
+/// Collects Obsidian `#tags` from the Markdown body.
+///
+/// Fenced and inline code are skipped, so examples such as `` `#not-a-tag` ``
+/// do not pollute the index. Tags glued to a preceding word (`C#`) and URL
+/// fragments (`/docs#setup`) stay plain text.
+pub fn extract_body_tags(content: &str) -> Vec<String> {
+    use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+
+    let mut tags = Vec::new();
+    let mut in_code_block = false;
+    for event in Parser::new_ext(content, Options::empty()) {
+        match event {
+            Event::Start(Tag::CodeBlock(_)) => in_code_block = true,
+            Event::End(TagEnd::CodeBlock) => in_code_block = false,
+            Event::Text(text) if !in_code_block => collect_tags(text.as_ref(), &mut tags),
+            _ => {}
+        }
+    }
+    tags
+}
+
+fn collect_tags(text: &str, tags: &mut Vec<String>) {
+    let mut scan = 0;
+    while let Some(relative) = text[scan..].find('#') {
+        let start = scan + relative;
+        let previous = text[..start].chars().next_back();
+        if previous.is_some_and(|character| {
+            character.is_alphanumeric() || matches!(character, '_' | '-' | '/' | '#')
+        }) {
+            scan = start + 1;
+            continue;
+        }
+
+        let mut end = start + 1;
+        for (index, character) in text[end..].char_indices() {
+            let valid = if index == 0 {
+                character.is_alphabetic() || character == '_'
+            } else {
+                character.is_alphanumeric() || matches!(character, '_' | '-' | '/')
+            };
+            if !valid {
+                break;
+            }
+            end += character.len_utf8();
+        }
+
+        let tag = text[start + 1..end].trim_end_matches(['-', '/']);
+        if tag.is_empty() {
+            scan = start + 1;
+            continue;
+        }
+        if !tags.iter().any(|known| known.eq_ignore_ascii_case(tag)) {
+            tags.push(tag.to_string());
+        }
+        scan = start + 1 + tag.len();
+    }
+}
+
+fn parse_latex_index_fields(
+    source: &str,
+) -> (Option<String>, Vec<String>, Vec<String>, Vec<String>) {
+    let mut title = None;
+    let mut headings = Vec::new();
+    let mut tags = Vec::new();
+    let mut links = Vec::new();
+
+    for line in source.lines() {
+        if let Some((_, comment)) = line.split_once('%') {
+            collect_tags(comment, &mut tags);
+        }
+        let code_part = line.split('%').next().unwrap_or(line).trim();
+        if title.is_none() {
+            if let Some(arg) = extract_latex_braced(code_part, "\\title") {
+                let clean = sanitize_text(&arg);
+                if !clean.is_empty() {
+                    title = Some(clean);
+                }
+            }
+        }
+        for cmd in [
+            "\\part*",
+            "\\part",
+            "\\chapter*",
+            "\\chapter",
+            "\\section*",
+            "\\section",
+            "\\subsection*",
+            "\\subsection",
+            "\\subsubsection*",
+            "\\subsubsection",
+        ] {
+            if let Some(arg) = extract_latex_braced(code_part, cmd) {
+                let clean = sanitize_text(&arg);
+                if !clean.is_empty() {
+                    if title.is_none() {
+                        title = Some(clean.clone());
+                    }
+                    headings.push(clean);
+                }
+                break;
+            }
+        }
+        for link_cmd in ["\\input", "\\include", "\\ref", "\\cite"] {
+            if let Some(arg) = extract_latex_braced(code_part, link_cmd) {
+                for part in arg.split(',') {
+                    let target = sanitize_text(part.trim());
+                    if !target.is_empty() && !links.contains(&target) {
+                        links.push(target);
+                    }
+                }
+            }
+        }
+        for (_, link) in find_links(code_part) {
+            if let terminalwiki_core::link::LinkTarget::Page { name, .. } = link.target {
+                if !links.contains(&name) {
+                    links.push(name);
+                }
+            }
+        }
+    }
+
+    (title, headings, tags, links)
+}
+
+fn extract_latex_braced(line: &str, cmd: &str) -> Option<String> {
+    let pos = line.find(cmd)?;
+    let mut rest = line[pos + cmd.len()..].trim_start();
+    if let Some(after_opt) = rest.strip_prefix('[') {
+        if let Some(end_opt) = after_opt.find(']') {
+            rest = after_opt[end_opt + 1..].trim_start();
+        }
+    }
+    let after_brace = rest.strip_prefix('{')?;
+    let mut depth = 1usize;
+    for (idx, ch) in after_brace.char_indices() {
+        if ch == '{' {
+            depth += 1;
+        } else if ch == '}' {
+            depth -= 1;
+            if depth == 0 {
+                return Some(after_brace[..idx].to_string());
+            }
+        }
+    }
+    None
+}
+
 pub fn parse_file(
     wiki_name: &str,
     wiki_root: &Path,
@@ -154,17 +302,40 @@ pub fn parse_file(
                 &text
             };
             let (h, b, l) = parse_markdown(body_slice);
+            let mut tags = fm.tags;
+            for tag in extract_body_tags(body_slice) {
+                if !tags.iter().any(|known| known.eq_ignore_ascii_case(&tag)) {
+                    tags.push(tag);
+                }
+            }
 
             (
                 sanitize_text(&raw_title),
                 fm.aliases,
-                fm.tags,
+                tags,
                 h,
                 sanitize_text(&b),
                 l,
             )
         }
-        ContentType::Text | ContentType::Code | ContentType::Latex => {
+        ContentType::Latex => {
+            let text = String::from_utf8_lossy(&content);
+            let stem_title = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let (tex_title, headings, tags, links) = parse_latex_index_fields(&text);
+            let title = tex_title.unwrap_or(stem_title);
+            (
+                sanitize_text(&title),
+                Vec::new(),
+                tags,
+                headings,
+                sanitize_text(&text),
+                links,
+            )
+        }
+        ContentType::Text | ContentType::Code => {
             let text = String::from_utf8_lossy(&content);
             let title = path
                 .file_stem()
@@ -405,7 +576,14 @@ fn scan_wiki_paths(root: &Path) -> Vec<PathBuf> {
     for entry in walker.flatten() {
         if let Some(ft) = entry.file_type() {
             if ft.is_file() {
-                paths.push(entry.into_path());
+                let path = entry.into_path();
+                if path
+                    .file_name()
+                    .is_some_and(|name| name == WIKI_CONFIG_FILE || name == IGNORE_FILE)
+                {
+                    continue;
+                }
+                paths.push(path);
             }
         }
     }
@@ -571,5 +749,38 @@ mod wiki_link_extraction_tests {
             links.is_empty(),
             "unclosed link must not be indexed: {links:?}"
         );
+    }
+
+    #[test]
+    fn extracts_body_tags_but_not_code_or_url_fragments() {
+        let tags = extract_body_tags(
+            "See #rust and #project/web.\n\n`#inline`\n\n```\n#fenced\n```\n\nC# /docs#setup\n",
+        );
+        assert_eq!(tags, ["rust", "project/web"]);
+    }
+
+    #[test]
+    fn body_tags_are_deduplicated_case_insensitively() {
+        let tags = extract_body_tags("#Rust and #rust and #RUST\n");
+        assert_eq!(tags, ["Rust"]);
+    }
+
+    #[test]
+    fn wiki_config_file_is_not_indexed_as_a_page() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path().join("wiki");
+        fs::create_dir_all(&root).expect("root");
+        fs::write(root.join("Page.md"), "# Page\n").expect("page");
+        fs::write(root.join(WIKI_CONFIG_FILE), "title = \"x\"\n").expect("config");
+        let wiki = Wiki::open(&terminalwiki_core::config::WikiEntry {
+            name: "w".to_string(),
+            path: root,
+            mounts: Vec::new(),
+        })
+        .expect("wiki");
+
+        let entries = build_all(&wiki, &Config::default()).expect("build");
+        let titles: Vec<&str> = entries.iter().map(|entry| entry.title.as_str()).collect();
+        assert_eq!(titles, ["Page"]);
     }
 }

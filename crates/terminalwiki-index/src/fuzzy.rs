@@ -22,6 +22,7 @@ pub struct FuzzyHit {
     pub wiki: String,
     pub relative: PathBuf,
     pub title: String,
+    pub tags: Vec<String>,
     pub score: u32,
     pub matched_indices: Vec<u32>,
 }
@@ -48,16 +49,31 @@ impl FuzzyDataset {
         self.items.len()
     }
 
+    /// Read-only view of every indexed page, used by the sidebar.
+    pub fn items(&self) -> &[FuzzyItem] {
+        &self.items
+    }
+
     pub fn find(&mut self, query: &str, limit: usize) -> Vec<FuzzyHit> {
-        if query.trim().is_empty() {
+        self.find_with_tags(query, &[], limit)
+    }
+
+    /// Fuzzy-matches `query` and keeps only pages carrying every tag in
+    /// `tags` (without the leading `#`). A hierarchical tag matches its
+    /// subtree, so `security` also finds `security/web`.
+    pub fn find_with_tags(&mut self, query: &str, tags: &[String], limit: usize) -> Vec<FuzzyHit> {
+        let query = query.trim();
+        if query.is_empty() {
             return self
                 .items
                 .iter()
+                .filter(|item| item_has_tags(item, tags))
                 .take(limit)
                 .map(|item| FuzzyHit {
                     wiki: item.wiki.clone(),
                     relative: item.relative.clone(),
                     title: item.title.clone(),
+                    tags: item.tags.clone(),
                     score: 0,
                     matched_indices: Vec::new(),
                 })
@@ -69,6 +85,9 @@ impl FuzzyDataset {
 
         let mut buf = Vec::new();
         for item in &self.items {
+            if !item_has_tags(item, tags) {
+                continue;
+            }
             let rel_str = item.relative.to_string_lossy();
             let mut best_score = 0u32;
             let mut best_indices = Vec::new();
@@ -114,6 +133,7 @@ impl FuzzyDataset {
                     wiki: item.wiki.clone(),
                     relative: item.relative.clone(),
                     title: item.title.clone(),
+                    tags: item.tags.clone(),
                     score: best_score,
                     matched_indices: best_indices,
                 });
@@ -123,5 +143,82 @@ impl FuzzyDataset {
         scored.sort_by_key(|b| std::cmp::Reverse(b.score));
         scored.truncate(limit);
         scored
+    }
+}
+
+fn item_has_tags(item: &FuzzyItem, tags: &[String]) -> bool {
+    tags.iter().all(|wanted| {
+        let wanted = normalize_tag(wanted);
+        if wanted.is_empty() {
+            return true;
+        }
+        item.tags.iter().any(|item_tag| {
+            let item_tag = normalize_tag(item_tag);
+            item_tag == wanted || item_tag.starts_with(&format!("{wanted}/"))
+        })
+    })
+}
+
+fn normalize_tag(tag: &str) -> String {
+    tag.trim().trim_start_matches('#').to_lowercase()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dataset() -> FuzzyDataset {
+        FuzzyDataset::new(vec![
+            FuzzyItem {
+                wiki: "vault".into(),
+                relative: PathBuf::from("Rust.md"),
+                title: "Rust".into(),
+                aliases: Vec::new(),
+                tags: vec!["programming".into(), "programming/rust".into()],
+            },
+            FuzzyItem {
+                wiki: "vault".into(),
+                relative: PathBuf::from("Cooking.md"),
+                title: "Cooking".into(),
+                aliases: Vec::new(),
+                tags: vec!["home".into()],
+            },
+            FuzzyItem {
+                wiki: "vault".into(),
+                relative: PathBuf::from("Security.md"),
+                title: "Security".into(),
+                aliases: Vec::new(),
+                tags: vec!["programming/security".into()],
+            },
+        ])
+    }
+
+    #[test]
+    fn tag_filter_is_case_insensitive_and_includes_subtags() {
+        let mut dataset = dataset();
+        let hits = dataset.find_with_tags("", &["#programming".into()], 10);
+        let titles: Vec<&str> = hits.iter().map(|h| h.title.as_str()).collect();
+        assert_eq!(titles, ["Rust", "Security"]);
+    }
+
+    #[test]
+    fn multiple_tags_must_all_match() {
+        let mut dataset = dataset();
+        let hits = dataset.find_with_tags(
+            "",
+            &["programming".into(), "programming/security".into()],
+            10,
+        );
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].title, "Security");
+    }
+
+    #[test]
+    fn tag_filter_combines_with_text_query() {
+        let mut dataset = dataset();
+        let hits = dataset.find_with_tags("rus", &["programming".into()], 10);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].title, "Rust");
+        assert_eq!(hits[0].tags, ["programming", "programming/rust"]);
     }
 }

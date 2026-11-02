@@ -153,38 +153,150 @@ impl<'a> Parser<'a> {
             self.pos += 1;
         }
         if start == self.pos {
+            if self.pos < self.src.len() {
+                let sym = self.src[self.pos] as char;
+                self.pos += 1;
+                return match sym {
+                    ' ' | ',' | ';' | ':' | '!' => MathLayout::text(" "),
+                    '{' | '}' | '%' | '$' | '&' | '#' | '_' => MathLayout::text(sym.to_string()),
+                    _ => MathLayout::text("\\"),
+                };
+            }
             return MathLayout::text("\\");
         }
         let command = std::str::from_utf8(&self.src[start..self.pos]).unwrap_or("");
         match command {
-            "frac" | "dfrac" | "tfrac" => fraction(self.argument(depth), self.argument(depth)),
-            "sqrt" => root(self.argument(depth)),
-            "sum" => MathLayout::text("∑"),
-            "prod" => MathLayout::text("∏"),
-            "int" => MathLayout::text("∫"),
+            "frac" | "dfrac" | "tfrac" | "cfrac" => {
+                fraction(self.argument(depth), self.argument(depth))
+            }
+            "binom" => binomial(self.argument(depth), self.argument(depth)),
+            "sqrt" => {
+                let index = self.optional_bracket_arg(depth);
+                root_with_index(index, self.argument(depth))
+            }
+            "overline" | "bar" => overline(self.argument(depth)),
+            "hat" => accent_top(self.argument(depth), '^'),
+            "tilde" => accent_top(self.argument(depth), '~'),
+            "vec" => accent_top(self.argument(depth), '→'),
+            "dot" => accent_top(self.argument(depth), '˙'),
+            "sum" => self.big_operator("∑", depth),
+            "prod" => self.big_operator("∏", depth),
+            "coprod" => self.big_operator("∐", depth),
+            "int" => self.big_operator("∫", depth),
+            "iint" => self.big_operator("∬", depth),
+            "iiint" => self.big_operator("∭", depth),
+            "oint" => self.big_operator("∮", depth),
+            "lim" => self.big_operator("lim", depth),
             "infty" => MathLayout::text("∞"),
+            "partial" => MathLayout::text("∂"),
+            "nabla" => MathLayout::text("∇"),
+            "forall" => MathLayout::text("∀"),
+            "exists" => MathLayout::text("∃"),
+            "nexists" => MathLayout::text("∄"),
+            "in" => MathLayout::text("∈"),
+            "notin" => MathLayout::text("∉"),
+            "ni" => MathLayout::text("∋"),
+            "subset" => MathLayout::text("⊂"),
+            "subseteq" => MathLayout::text("⊆"),
+            "supset" => MathLayout::text("⊃"),
+            "supseteq" => MathLayout::text("⊇"),
+            "cup" => MathLayout::text("∪"),
+            "cap" => MathLayout::text("∩"),
+            "bigcup" => self.big_operator("⋃", depth),
+            "bigcap" => self.big_operator("⋂", depth),
+            "emptyset" | "varnothing" => MathLayout::text("∅"),
             "le" | "leq" => MathLayout::text("≤"),
             "ge" | "geq" => MathLayout::text("≥"),
-            "neq" => MathLayout::text("≠"),
+            "neq" | "ne" => MathLayout::text("≠"),
+            "approx" => MathLayout::text("≈"),
+            "equiv" => MathLayout::text("≡"),
+            "sim" => MathLayout::text("∼"),
+            "simeq" => MathLayout::text("≃"),
+            "cong" => MathLayout::text("≅"),
+            "propto" => MathLayout::text("∝"),
             "to" | "rightarrow" => MathLayout::text("→"),
-            "left" | "right" | "big" | "Big" | "quad" | "qquad" => MathLayout::text(""),
-            "text" | "mathrm" | "mathbf" | "mathbb" => self.argument(depth),
+            "leftarrow" | "gets" => MathLayout::text("←"),
+            "leftrightarrow" => MathLayout::text("↔"),
+            "implies" | "Rightarrow" => MathLayout::text("⇒"),
+            "impliedby" | "Leftarrow" => MathLayout::text("⇐"),
+            "iff" | "Leftrightarrow" => MathLayout::text("⇔"),
+            "mapsto" => MathLayout::text("↦"),
+            "left" | "right" | "big" | "Big" | "bigg" | "Bigg" | "quad" | "qquad" => {
+                MathLayout::text("")
+            }
+            "mathbb" => {
+                let arg = self.argument(depth);
+                let txt = arg.lines.join("");
+                MathLayout::text(to_blackboard(&txt))
+            }
+            "text" | "mathrm" | "mathbf" | "mathit" | "mathcal" | "mathfrak" | "mathsf"
+            | "texttt" | "operatorname" => self.argument(depth),
+            "sin" | "cos" | "tan" | "cot" | "sec" | "csc" | "arcsin" | "arccos" | "arctan"
+            | "sinh" | "cosh" | "tanh" | "log" | "ln" | "exp" | "max" | "min" | "sup" | "inf"
+            | "det" | "dim" | "ker" | "deg" | "gcd" | "arg" | "mod" => {
+                MathLayout::text(command.to_string())
+            }
             "alpha" => MathLayout::text("α"),
             "beta" => MathLayout::text("β"),
             "gamma" => MathLayout::text("γ"),
             "delta" => MathLayout::text("δ"),
-            "epsilon" => MathLayout::text("ε"),
-            "theta" => MathLayout::text("θ"),
+            "epsilon" | "varepsilon" => MathLayout::text("ε"),
+            "zeta" => MathLayout::text("ζ"),
+            "eta" => MathLayout::text("η"),
+            "theta" | "vartheta" => MathLayout::text("θ"),
+            "iota" => MathLayout::text("ι"),
+            "kappa" => MathLayout::text("κ"),
             "lambda" => MathLayout::text("λ"),
             "mu" => MathLayout::text("μ"),
-            "pi" => MathLayout::text("π"),
-            "sigma" => MathLayout::text("σ"),
-            "phi" => MathLayout::text("φ"),
+            "nu" => MathLayout::text("ν"),
+            "xi" => MathLayout::text("ξ"),
+            "pi" | "varpi" => MathLayout::text("π"),
+            "rho" | "varrho" => MathLayout::text("ρ"),
+            "sigma" | "varsigma" => MathLayout::text("σ"),
+            "tau" => MathLayout::text("τ"),
+            "upsilon" => MathLayout::text("υ"),
+            "phi" | "varphi" => MathLayout::text("φ"),
+            "chi" => MathLayout::text("χ"),
+            "psi" => MathLayout::text("ψ"),
             "omega" => MathLayout::text("ω"),
+            "Gamma" => MathLayout::text("Γ"),
+            "Delta" => MathLayout::text("Δ"),
+            "Theta" => MathLayout::text("Θ"),
+            "Lambda" => MathLayout::text("Λ"),
+            "Xi" => MathLayout::text("Ξ"),
+            "Pi" => MathLayout::text("Π"),
+            "Sigma" => MathLayout::text("Σ"),
+            "Upsilon" => MathLayout::text("Υ"),
+            "Phi" => MathLayout::text("Φ"),
+            "Psi" => MathLayout::text("Ψ"),
+            "Omega" => MathLayout::text("Ω"),
             "times" => MathLayout::text("×"),
+            "div" => MathLayout::text("÷"),
             "cdot" => MathLayout::text("·"),
+            "ast" | "star" => MathLayout::text("∗"),
+            "circ" => MathLayout::text("∘"),
+            "bullet" => MathLayout::text("•"),
+            "oplus" => MathLayout::text("⊕"),
+            "otimes" => MathLayout::text("⊗"),
+            "ominus" => MathLayout::text("⊖"),
             "pm" => MathLayout::text("±"),
-            "ldots" | "dots" => MathLayout::text("…"),
+            "mp" => MathLayout::text("∓"),
+            "perp" => MathLayout::text("⊥"),
+            "parallel" => MathLayout::text("∥"),
+            "angle" => MathLayout::text("∠"),
+            "triangle" => MathLayout::text("△"),
+            "neg" | "lnot" => MathLayout::text("¬"),
+            "land" | "wedge" => MathLayout::text("∧"),
+            "lor" | "vee" => MathLayout::text("∨"),
+            "ldots" | "dots" | "cdots" => MathLayout::text("…"),
+            "vdots" => MathLayout::text("⋮"),
+            "ddots" => MathLayout::text("⋱"),
+            "prime" => MathLayout::text("′"),
+            "hbar" => MathLayout::text("ℏ"),
+            "ell" => MathLayout::text("ℓ"),
+            "Re" => MathLayout::text("ℜ"),
+            "Im" => MathLayout::text("ℑ"),
+            "aleph" => MathLayout::text("ℵ"),
             " " | "," | "!" => MathLayout::text(" "),
             other => {
                 self.warnings
@@ -192,6 +304,19 @@ impl<'a> Parser<'a> {
                 MathLayout::text(format!("\\{other}"))
             }
         }
+    }
+
+    fn optional_bracket_arg(&mut self, depth: usize) -> Option<MathLayout> {
+        if self.pos < self.src.len() && self.src[self.pos] == b'[' {
+            self.pos += 1;
+            Some(self.sequence(Some(b']'), depth + 1))
+        } else {
+            None
+        }
+    }
+
+    fn big_operator(&mut self, symbol: &str, _depth: usize) -> MathLayout {
+        MathLayout::text(symbol)
     }
 }
 
@@ -245,22 +370,115 @@ fn fraction(mut numerator: MathLayout, mut denominator: MathLayout) -> MathLayou
     }
 }
 
-fn root(mut inner: MathLayout) -> MathLayout {
+fn binomial(mut top: MathLayout, mut bottom: MathLayout) -> MathLayout {
+    let width = top.width_cells.max(bottom.width_cells).max(1);
+    let top_centered = center_lines(&top.lines, width);
+    let bot_centered = center_lines(&bottom.lines, width);
     let mut lines = Vec::new();
-    for (i, line) in inner.lines.iter().enumerate() {
-        lines.push(if i == 0 {
-            format!("√{}", "‾".repeat(inner.width_cells))
+    let total_rows = top_centered.len() + bot_centered.len();
+    for (idx, row) in top_centered.into_iter().chain(bot_centered).enumerate() {
+        let (l, r) = if total_rows <= 1 {
+            ("(", ")")
+        } else if idx == 0 {
+            ("⎛", "⎞")
+        } else if idx + 1 == total_rows {
+            ("⎝", "⎠")
         } else {
-            format!(" {}", line)
-        });
+            ("⎜", "⎟")
+        };
+        lines.push(format!("{l} {row} {r}"));
+    }
+    let mut warnings = Vec::new();
+    warnings.append(&mut top.warnings);
+    warnings.append(&mut bottom.warnings);
+    MathLayout {
+        height_cells: lines.len(),
+        width_cells: width + 4,
+        baseline: lines.len() / 2,
+        lines,
+        warnings,
+    }
+}
+
+fn root_with_index(index: Option<MathLayout>, mut inner: MathLayout) -> MathLayout {
+    let prefix = index
+        .as_ref()
+        .map(|idx| to_super(&idx.lines.join("")))
+        .unwrap_or_default();
+    let mut warnings = Vec::new();
+    if let Some(mut idx) = index {
+        warnings.append(&mut idx.warnings);
+    }
+    warnings.append(&mut inner.warnings);
+
+    if inner.lines.len() <= 1 {
+        let body = inner.lines.first().cloned().unwrap_or_default();
+        let rendered = format!("{prefix}√({body})");
+        return MathLayout {
+            width_cells: display_width(&rendered),
+            height_cells: 1,
+            baseline: 0,
+            lines: vec![rendered],
+            warnings,
+        };
+    }
+
+    let pad = " ".repeat(display_width(&prefix) + 1);
+    let mut lines = Vec::with_capacity(inner.lines.len() + 1);
+    lines.push(format!("{prefix}√{}", "‾".repeat(inner.width_cells)));
+    for line in &inner.lines {
+        lines.push(format!("{pad}{line}"));
     }
     MathLayout {
-        width_cells: inner.width_cells + 1,
+        width_cells: display_width(&prefix) + 1 + inner.width_cells,
         height_cells: lines.len(),
-        baseline: inner.baseline,
+        baseline: inner.baseline + 1,
+        lines,
+        warnings,
+    }
+}
+
+fn overline(mut inner: MathLayout) -> MathLayout {
+    let width = inner.width_cells.max(1);
+    let mut lines = Vec::with_capacity(inner.lines.len() + 1);
+    lines.push("‾".repeat(width));
+    lines.extend(inner.lines);
+    MathLayout {
+        width_cells: width,
+        height_cells: lines.len(),
+        baseline: inner.baseline + 1,
         lines,
         warnings: std::mem::take(&mut inner.warnings),
     }
+}
+
+fn accent_top(mut inner: MathLayout, mark: char) -> MathLayout {
+    let body = inner.lines.join("");
+    let rendered = format!("{body}{mark}");
+    MathLayout {
+        width_cells: display_width(&rendered),
+        height_cells: 1,
+        baseline: 0,
+        lines: vec![rendered],
+        warnings: std::mem::take(&mut inner.warnings),
+    }
+}
+
+fn to_blackboard(text: &str) -> String {
+    text.chars()
+        .map(|c| match c {
+            'R' => 'ℝ',
+            'N' => 'ℕ',
+            'Z' => 'ℤ',
+            'Q' => 'ℚ',
+            'C' => 'ℂ',
+            'F' => '𝔽',
+            'P' => 'ℙ',
+            'E' => '𝔼',
+            '1' => '𝟙',
+            other => other,
+        })
+        .collect()
 }
 
 fn center_lines(lines: &[String], width: usize) -> Vec<String> {
@@ -279,18 +497,31 @@ fn center_lines(lines: &[String], width: usize) -> Vec<String> {
 }
 
 fn layout_matrix(formula: &str) -> Option<MathLayout> {
-    let (open, close) = if formula.contains("\\begin{bmatrix}") {
-        ("[", "]")
+    let (open, close, join_sep) = if formula.contains("\\begin{bmatrix}") {
+        ("[", "]", "  ")
     } else if formula.contains("\\begin{pmatrix}") {
-        ("(", ")")
+        ("(", ")", "  ")
+    } else if formula.contains("\\begin{vmatrix}") {
+        ("│", "│", "  ")
+    } else if formula.contains("\\begin{Bmatrix}") {
+        ("{", "}", "  ")
+    } else if formula.contains("\\begin{matrix}") {
+        ("", "", "  ")
     } else if formula.contains("\\begin{cases}") {
-        ("{", "}")
+        ("{", "", "  ")
+    } else if formula.contains("\\begin{aligned}")
+        || formula.contains("\\begin{align*}")
+        || formula.contains("\\begin{align}")
+    {
+        ("", "", " ")
     } else {
         return None;
     };
     let body = formula.split('}').nth(1)?.split("\\end").next()?.trim();
     let rows: Vec<Vec<String>> = body
         .split("\\\\")
+        .map(str::trim)
+        .filter(|row| !row.is_empty())
         .map(|row| {
             row.split('&')
                 .map(|cell| layout_math(cell.trim()).lines.join(" "))
@@ -321,7 +552,12 @@ fn layout_matrix(formula: &str) -> Option<MathLayout> {
                     )
                 })
                 .collect();
-            format!("{open} {} {close}", cells.join("  "))
+            let joined = cells.join(join_sep);
+            match (open.is_empty(), close.is_empty()) {
+                (true, true) => joined.trim_end().to_string(),
+                (false, true) => format!("{open} {}", joined.trim_end()),
+                _ => format!("{open} {joined} {close}"),
+            }
         })
         .collect();
     let width_cells = lines
@@ -356,8 +592,31 @@ fn to_super(text: &str) -> String {
             '=' => '⁼',
             '(' => '⁽',
             ')' => '⁾',
-            'n' => 'ⁿ',
+            'a' => 'ᵃ',
+            'b' => 'ᵇ',
+            'c' => 'ᶜ',
+            'd' => 'ᵈ',
+            'e' => 'ᵉ',
+            'f' => 'ᶠ',
+            'g' => 'ᵍ',
+            'h' => 'ʰ',
             'i' => 'ⁱ',
+            'j' => 'ʲ',
+            'k' => 'ᵏ',
+            'l' => 'ˡ',
+            'm' => 'ᵐ',
+            'n' => 'ⁿ',
+            'o' => 'ᵒ',
+            'p' => 'ᵖ',
+            'r' => 'ʳ',
+            's' => 'ˢ',
+            't' => 'ᵗ',
+            'u' => 'ᵘ',
+            'v' => 'ᵛ',
+            'w' => 'ʷ',
+            'x' => 'ˣ',
+            'y' => 'ʸ',
+            'z' => 'ᶻ',
             other => other,
         })
         .collect()
@@ -382,13 +641,20 @@ fn to_sub(text: &str) -> String {
             ')' => '₎',
             'a' => 'ₐ',
             'e' => 'ₑ',
+            'h' => 'ₕ',
             'i' => 'ᵢ',
             'j' => 'ⱼ',
+            'k' => 'ₖ',
+            'l' => 'ₗ',
+            'm' => 'ₘ',
             'n' => 'ₙ',
             'o' => 'ₒ',
+            'p' => 'ₚ',
             'r' => 'ᵣ',
             's' => 'ₛ',
             't' => 'ₜ',
+            'u' => 'ᵤ',
+            'v' => 'ᵥ',
             'x' => 'ₓ',
             other => other,
         })
@@ -401,7 +667,9 @@ mod tests {
     #[test]
     fn fractions_and_roots_are_two_dimensional() {
         assert_eq!(layout_math("\\frac{a+b}{c}").lines, ["a+b", "───", " c "]);
-        assert!(layout_math("\\sqrt{x^2+1}").lines[0].starts_with("√"));
+        let sqrt_lines = layout_math("\\sqrt{x^2+1}").lines;
+        assert!(sqrt_lines[0].starts_with("√"));
+        assert!(sqrt_lines[0].contains("x²+1"));
     }
     #[test]
     fn greek_and_matrices_are_visible() {
@@ -410,6 +678,17 @@ mod tests {
             layout_math("\\begin{bmatrix}1&2\\\\3&4\\end{bmatrix}").lines,
             ["[ 1  2 ]", "[ 3  4 ]"]
         );
+    }
+    #[test]
+    fn aligned_and_blackboard_and_binomial_render() {
+        let aligned =
+            layout_math("\\begin{aligned}f(x) &= x^2\\\\g(x) &= \\mathbb{R}\\end{aligned}");
+        assert_eq!(aligned.lines.len(), 2);
+        assert!(aligned.lines[0].contains("x²"));
+        assert!(aligned.lines[1].contains("ℝ"));
+
+        let binom = layout_math("\\binom{n}{k}");
+        assert_eq!(binom.lines.len(), 2);
     }
     #[test]
     fn unknown_commands_warn_without_panicking() {

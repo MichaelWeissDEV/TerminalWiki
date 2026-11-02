@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Component, PathBuf};
 
 use terminalwiki_core::resolve;
 use terminalwiki_core::watch::{ChangeKind, WikiChange};
@@ -21,10 +21,90 @@ pub enum Mode {
     Finder,
     Outline,
     InPageSearch,
+    WikiSearch,
     Backlinks,
     Command,
     Help,
     Graph,
+    Sidebar,
+    NewPage,
+    TagPrompt,
+}
+
+/// Reading layout mode for the TUI viewport.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewLayout {
+    /// Default clean reader layout with optional sidebar.
+    Standard,
+    /// Distraction-free centered reading view (no sidebars, comfortable margins).
+    Zen,
+    /// Multi-pane Wikipedia-style layout (Vault explorer + Article + Inspector with TOC/Backlinks).
+    Wikipedia,
+}
+
+impl ViewLayout {
+    pub fn label(self) -> &'static str {
+        match self {
+            ViewLayout::Standard => "Standard",
+            ViewLayout::Zen => "Zen Reader",
+            ViewLayout::Wikipedia => "Wikipedia",
+        }
+    }
+}
+
+/// Organization mode for the left sidebar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SidebarMode {
+    /// Flat list of pages.
+    Flat,
+    /// Hierarchical vault folder tree structure.
+    Tree,
+}
+
+/// Starting content for a page created from inside the TUI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageTemplate {
+    Blank,
+    Todo,
+    QuickNote,
+}
+
+impl PageTemplate {
+    pub fn label(self) -> &'static str {
+        match self {
+            PageTemplate::Blank => "Blank",
+            PageTemplate::Todo => "Todo list",
+            PageTemplate::QuickNote => "Quick note (opens $EDITOR)",
+        }
+    }
+
+    fn toggle(self) -> Self {
+        match self {
+            PageTemplate::Blank => PageTemplate::Todo,
+            PageTemplate::Todo => PageTemplate::QuickNote,
+            PageTemplate::QuickNote => PageTemplate::Blank,
+        }
+    }
+}
+
+/// A command entry in the VS Code-style `Ctrl+P` `>` command palette.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuickCommandHit {
+    pub id: &'static str,
+    pub title: &'static str,
+    pub shortcut: &'static str,
+    pub description: &'static str,
+}
+
+/// A full-text match across the wiki (`Ctrl+W` WikiSearch).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WikiSearchHit {
+    pub wiki: String,
+    pub relative: PathBuf,
+    pub title: String,
+    pub line_number: usize,
+    pub snippet: String,
+    pub score: i64,
 }
 
 /// Default neighbourhood depth for the graph view (spec item 42).
@@ -83,11 +163,25 @@ pub struct App<'a> {
     pub selected_link_idx: Option<usize>,
 
     pub mode: Mode,
+    pub layout_mode: ViewLayout,
 
-    // Finder (Nucleo-powered inline view)
+    // Sidebar page explorer
+    pub sidebar_visible: bool,
+    pub sidebar_selected: usize,
+    pub sidebar_mode: SidebarMode,
+
+    // New page prompt
+    pub new_page_name: String,
+    pub new_page_template: PageTemplate,
+
+    // Tag prompt ('t')
+    pub tag_input: String,
+
+    // Finder / VS Code Quick Bar (Ctrl+P, '>' for commands)
     pub finder_query: String,
     pub fuzzy_dataset: FuzzyDataset,
     pub finder_filtered: Vec<FuzzyHit>,
+    pub finder_commands: Vec<QuickCommandHit>,
     pub finder_selected: usize,
 
     // Outline (inline view)
@@ -102,9 +196,15 @@ pub struct App<'a> {
     pub command_suggestions: Vec<String>,
     pub command_selected: usize,
 
-    // In-page search
+    // In-page search (Ctrl+F / '/')
     pub in_page_query: String,
     pub search_matches: Vec<usize>,
+    pub search_match_idx: usize,
+
+    // Wiki-wide full-text search (Ctrl+W)
+    pub wiki_search_query: String,
+    pub wiki_search_hits: Vec<WikiSearchHit>,
+    pub wiki_search_selected: usize,
 
     /// Whole-wiki link graph, built lazily and reused.
     ///
@@ -124,14 +224,132 @@ pub struct App<'a> {
 const COMMAND_LIST: &[&str] = &[
     "open",
     "search",
+    "wsearch",
     "find",
     "backlinks",
     "outline",
     "graph",
     "edit",
+    "new",
+    "quicknote",
+    "qn",
+    "todo",
+    "tag",
+    "sidebar",
+    "tree",
+    "zen",
+    "wikipedia",
+    "layout",
+    "latex",
+    "compile",
     "wiki",
     "reload",
     "quit",
+];
+
+pub const QUICK_COMMANDS: &[QuickCommandHit] = &[
+    QuickCommandHit {
+        id: "new",
+        title: "New Page",
+        shortcut: "n",
+        description: "Create a new Markdown page in the current wiki",
+    },
+    QuickCommandHit {
+        id: "quicknote",
+        title: "Quick Note (Open in Vim/Nvim)",
+        shortcut: "Ctrl+N / Q",
+        description: "Create a note in QuickNotes/ and immediately open $EDITOR",
+    },
+    QuickCommandHit {
+        id: "todo",
+        title: "New Todo List Page",
+        shortcut: "T",
+        description: "Create a new page pre-filled with a task list and #todo tag",
+    },
+    QuickCommandHit {
+        id: "edit",
+        title: "Edit Current Page in $EDITOR",
+        shortcut: "e",
+        description: "Open the current page in nvim/vim and reload on exit",
+    },
+    QuickCommandHit {
+        id: "wsearch",
+        title: "Wiki-Wide Full-Text Search",
+        shortcut: "Ctrl+W",
+        description: "Search across all pages for words or sentence parts",
+    },
+    QuickCommandHit {
+        id: "inpage",
+        title: "Find in Current Page",
+        shortcut: "Ctrl+F / /",
+        description: "Search and highlight words or phrases in the open page",
+    },
+    QuickCommandHit {
+        id: "graph",
+        title: "Open Knowledge Graph",
+        shortcut: "g",
+        description: "Interactive Obsidian-style link graph around current page",
+    },
+    QuickCommandHit {
+        id: "zen",
+        title: "Toggle Zen Reader View",
+        shortcut: "z",
+        description: "Distraction-free centered reading layout",
+    },
+    QuickCommandHit {
+        id: "wikipedia",
+        title: "Toggle Wikipedia Multi-Pane Layout",
+        shortcut: "w",
+        description: "Show Vault Explorer + Article + TOC/Backlinks Inspector",
+    },
+    QuickCommandHit {
+        id: "sidebar",
+        title: "Toggle Sidebar Explorer",
+        shortcut: "s",
+        description: "Show or hide the left page explorer sidebar",
+    },
+    QuickCommandHit {
+        id: "tree",
+        title: "Toggle Vault Folder Tree / Flat List",
+        shortcut: "v",
+        description: "Switch sidebar between folder tree hierarchy and flat list",
+    },
+    QuickCommandHit {
+        id: "tag",
+        title: "Add Tag to Current Page",
+        shortcut: "t",
+        description: "Append a #tag to the open page and re-index",
+    },
+    QuickCommandHit {
+        id: "latex",
+        title: "Compile LaTeX Page (pdflatex/xelatex/tectonic/latexmk)",
+        shortcut: ":latex",
+        description: "Compile the current .tex page using an installed LaTeX engine",
+    },
+    QuickCommandHit {
+        id: "outline",
+        title: "Document Outline (Headings)",
+        shortcut: "o",
+        description: "Jump to a section heading in the current page",
+    },
+    QuickCommandHit {
+        id: "backlinks",
+        title: "Show Backlinks",
+        shortcut: "b",
+        description: "List all pages linking to the current page",
+    },
+    QuickCommandHit {
+        id: "reload",
+        title: "Reload Current Page",
+        shortcut: ":reload",
+        description: "Re-read and re-render the current file from disk",
+    },
+    QuickCommandHit {
+        id: "quit",
+        title: "Quit TerminalWiki",
+        shortcut: "q",
+        description: "Exit the interactive TUI",
+    },
 ];
 
 impl<'a> App<'a> {
@@ -157,6 +375,13 @@ impl<'a> App<'a> {
         for wiki in wikis.iter() {
             if let Ok(idx) = terminalwiki_index::WikiIndex::load(&wiki.name) {
                 for e in &idx.entries {
+                    if e.relative.file_name()
+                        == Some(std::ffi::OsStr::new(
+                            terminalwiki_core::config::WIKI_CONFIG_FILE,
+                        ))
+                    {
+                        continue;
+                    }
                     fuzzy_items.push(FuzzyItem {
                         wiki: wiki.name.clone(),
                         relative: e.relative.clone(),
@@ -208,9 +433,17 @@ impl<'a> App<'a> {
             history_forward: Vec::new(),
             selected_link_idx: None,
             mode: Mode::Normal,
+            layout_mode: ViewLayout::Standard,
+            sidebar_visible: false,
+            sidebar_selected: 0,
+            sidebar_mode: SidebarMode::Flat,
+            new_page_name: String::new(),
+            new_page_template: PageTemplate::Blank,
+            tag_input: String::new(),
             finder_query: String::new(),
             fuzzy_dataset: dataset,
             finder_filtered: initial_hits,
+            finder_commands: QUICK_COMMANDS.to_vec(),
             finder_selected: 0,
             outline_selected: 0,
             backlinks: Vec::new(),
@@ -220,6 +453,10 @@ impl<'a> App<'a> {
             command_selected: 0,
             in_page_query: String::new(),
             search_matches: Vec::new(),
+            search_match_idx: 0,
+            wiki_search_query: String::new(),
+            wiki_search_hits: Vec::new(),
+            wiki_search_selected: 0,
             graph_cache: None,
             graph_view: None,
             page_missing: false,
@@ -242,13 +479,20 @@ impl<'a> App<'a> {
     }
 
     pub fn load_home(&mut self, wiki_name: &str) -> Result<()> {
-        let wiki = self.wikis.require(wiki_name)?;
+        // Resolve the configured home page to a wiki-relative path: link and
+        // page resolution deliberately reject absolute paths.
+        let home = {
+            let wiki = self.wikis.require(wiki_name)?;
+            wiki.home_page()
+                .map(|path| wiki.relative(&path).to_path_buf())
+        };
 
-        if let Some(home_path) = wiki.home_page() {
+        if let Some(home_path) = home {
             let path_str = home_path.to_string_lossy().into_owned();
             return self.load_page(wiki_name, &path_str, false);
         }
 
+        let wiki = self.wikis.require(wiki_name)?;
         // Virtual Home Overview
         let mut overview = format!(
             "# {}\n\n*Knowledge base overview*\n\n## Pages\n\n",
@@ -387,9 +631,591 @@ impl<'a> App<'a> {
         self.h_scroll = self.h_scroll.saturating_add(amount);
     }
 
+    pub fn finder_is_command_mode(&self) -> bool {
+        self.finder_query.trim_start().starts_with('>')
+    }
+
     pub fn update_finder_filter(&mut self) {
-        self.finder_filtered = self.fuzzy_dataset.find(&self.finder_query, 30);
-        self.finder_selected = 0;
+        if self.finder_is_command_mode() {
+            let raw = self.finder_query.trim_start();
+            let after_gt = raw.strip_prefix('>').unwrap_or(raw).trim();
+            let cmd_token = after_gt
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .to_lowercase();
+            if cmd_token.is_empty() {
+                self.finder_commands = QUICK_COMMANDS.to_vec();
+            } else {
+                self.finder_commands = QUICK_COMMANDS
+                    .iter()
+                    .filter(|c| {
+                        c.id.to_lowercase().contains(&cmd_token)
+                            || c.title.to_lowercase().contains(&cmd_token)
+                            || c.description.to_lowercase().contains(&cmd_token)
+                    })
+                    .cloned()
+                    .collect();
+            }
+            self.finder_selected = 0;
+        } else {
+            let (text, tags) = split_finder_query(&self.finder_query);
+            self.finder_filtered = self.fuzzy_dataset.find_with_tags(&text, &tags, 50);
+            self.finder_selected = 0;
+        }
+    }
+
+    pub fn execute_finder_selection(&mut self) {
+        if self.finder_is_command_mode() {
+            let raw = self.finder_query.trim_start().to_string();
+            let after_gt = raw.strip_prefix('>').unwrap_or(&raw).trim();
+            let arg_tail: Option<String> = after_gt
+                .split_once(char::is_whitespace)
+                .map(|(_, rest)| rest.trim().to_string())
+                .filter(|s| !s.is_empty());
+
+            if let Some(cmd) = self.finder_commands.get(self.finder_selected).cloned() {
+                self.mode = Mode::Normal;
+                match cmd.id {
+                    "new" => {
+                        if let Some(name) = arg_tail {
+                            if let Err(err) = self.create_page(&name, PageTemplate::Blank) {
+                                self.status_message = Some(err.to_string());
+                            }
+                        } else {
+                            self.begin_new_page(PageTemplate::Blank);
+                        }
+                    }
+                    "quicknote" => {
+                        if let Err(err) = self.create_quick_note(arg_tail.as_deref(), true) {
+                            self.status_message = Some(err.to_string());
+                        }
+                    }
+                    "todo" => {
+                        if let Some(name) = arg_tail {
+                            if let Err(err) = self.create_page(&name, PageTemplate::Todo) {
+                                self.status_message = Some(err.to_string());
+                            }
+                        } else {
+                            self.begin_new_page(PageTemplate::Todo);
+                        }
+                    }
+                    "edit" => self.open_current_in_editor(),
+                    "wsearch" => {
+                        self.mode = Mode::WikiSearch;
+                        self.wiki_search_query = arg_tail.unwrap_or_default();
+                        self.update_wiki_search();
+                    }
+                    "inpage" => {
+                        self.mode = Mode::InPageSearch;
+                        self.in_page_query = arg_tail.unwrap_or_default();
+                        self.update_in_page_search();
+                    }
+                    "graph" => self.open_graph(),
+                    "zen" => self.toggle_zen_mode(),
+                    "wikipedia" => self.toggle_wikipedia_layout(),
+                    "sidebar" => self.toggle_sidebar(),
+                    "tree" => self.toggle_sidebar_mode(),
+                    "tag" => {
+                        if let Some(tag) = arg_tail {
+                            if let Err(err) = self.add_tag_to_current_page(&tag) {
+                                self.status_message = Some(err.to_string());
+                            }
+                        } else {
+                            self.mode = Mode::TagPrompt;
+                            self.tag_input.clear();
+                        }
+                    }
+                    "outline" => {
+                        if !self.headings.is_empty() {
+                            self.mode = Mode::Outline;
+                            self.outline_selected = 0;
+                        } else {
+                            self.status_message =
+                                Some("No headings in current document".to_string());
+                        }
+                    }
+                    "backlinks" => {
+                        self.load_backlinks();
+                        self.mode = Mode::Backlinks;
+                    }
+                    "latex" => self.compile_current_latex(arg_tail.as_deref()),
+                    "reload" => self.reload_current_page(),
+                    "quit" => self.should_quit = true,
+                    _ => {}
+                }
+            } else if !after_gt.is_empty() {
+                // Direct command execution fallback
+                self.mode = Mode::Normal;
+                self.command_input = after_gt.to_string();
+                self.execute_command();
+            }
+        } else if let Some(hit) = self.finder_filtered.get(self.finder_selected).cloned() {
+            self.mode = Mode::Normal;
+            let path_str = hit.relative.to_string_lossy().into_owned();
+            let _ = self.load_page(&hit.wiki, &path_str, true);
+        }
+    }
+
+    /// Toggles distraction-free Zen Reader layout.
+    pub fn toggle_zen_mode(&mut self) {
+        self.layout_mode = if self.layout_mode == ViewLayout::Zen {
+            ViewLayout::Standard
+        } else {
+            ViewLayout::Zen
+        };
+        self.status_message = Some(format!("Layout: {}", self.layout_mode.label()));
+    }
+
+    /// Toggles the multi-pane Wikipedia layout (Vault Tree + Article + TOC/Backlinks).
+    pub fn toggle_wikipedia_layout(&mut self) {
+        self.layout_mode = if self.layout_mode == ViewLayout::Wikipedia {
+            ViewLayout::Standard
+        } else {
+            self.load_backlinks();
+            ViewLayout::Wikipedia
+        };
+        self.status_message = Some(format!("Layout: {}", self.layout_mode.label()));
+    }
+
+    /// Switches the sidebar between flat pages list and hierarchical vault folder tree.
+    pub fn toggle_sidebar_mode(&mut self) {
+        self.sidebar_mode = match self.sidebar_mode {
+            SidebarMode::Flat => SidebarMode::Tree,
+            SidebarMode::Tree => SidebarMode::Flat,
+        };
+        if !self.sidebar_visible {
+            self.sidebar_visible = true;
+        }
+        let label = match self.sidebar_mode {
+            SidebarMode::Flat => "Sidebar: Pages List",
+            SidebarMode::Tree => "Sidebar: Vault Folder Tree",
+        };
+        self.status_message = Some(label.to_string());
+    }
+
+    /// Recomputes live in-page search matches (`Ctrl+F` / `/`) and jumps to the first match.
+    pub fn update_in_page_search(&mut self) {
+        self.search_matches.clear();
+        self.search_match_idx = 0;
+        let q = self.in_page_query.trim().to_lowercase();
+        if q.is_empty() {
+            return;
+        }
+        for (i, line) in self.lines.iter().enumerate() {
+            let line_str: String = line.iter().map(|s| s.text.as_str()).collect();
+            if line_str.to_lowercase().contains(&q) {
+                self.search_matches.push(i);
+            }
+        }
+        if let Some(&first_line) = self.search_matches.first() {
+            self.scroll = first_line.saturating_sub(3);
+        }
+    }
+
+    /// Jumps to the next in-page search match.
+    pub fn next_search_match(&mut self) {
+        if self.search_matches.is_empty() {
+            return;
+        }
+        self.search_match_idx = (self.search_match_idx + 1) % self.search_matches.len();
+        if let Some(&line) = self.search_matches.get(self.search_match_idx) {
+            self.scroll = line.saturating_sub(3);
+            self.status_message = Some(format!(
+                "Match {}/{} (line {})",
+                self.search_match_idx + 1,
+                self.search_matches.len(),
+                line + 1
+            ));
+        }
+    }
+
+    /// Jumps to the previous in-page search match.
+    pub fn prev_search_match(&mut self) {
+        if self.search_matches.is_empty() {
+            return;
+        }
+        self.search_match_idx = if self.search_match_idx == 0 {
+            self.search_matches.len() - 1
+        } else {
+            self.search_match_idx - 1
+        };
+        if let Some(&line) = self.search_matches.get(self.search_match_idx) {
+            self.scroll = line.saturating_sub(3);
+            self.status_message = Some(format!(
+                "Match {}/{} (line {})",
+                self.search_match_idx + 1,
+                self.search_matches.len(),
+                line + 1
+            ));
+        }
+    }
+
+    /// Performs wiki-wide full-text search across words and sentence parts (`Ctrl+W`).
+    pub fn update_wiki_search(&mut self) {
+        self.wiki_search_hits.clear();
+        self.wiki_search_selected = 0;
+        let query = self.wiki_search_query.trim();
+        if query.is_empty() {
+            return;
+        }
+        let q_lower = query.to_lowercase();
+        let tokens: Vec<&str> = q_lower.split_whitespace().collect();
+        if tokens.is_empty() {
+            return;
+        }
+
+        let mut hits = Vec::new();
+        for item in self.fuzzy_dataset.items() {
+            let Some(wiki) = self.wikis.get(&item.wiki) else {
+                continue;
+            };
+            let abs_path = wiki.root.join(&item.relative);
+            let Ok(content) = fs::read_to_string(&abs_path) else {
+                continue;
+            };
+            let fm = terminalwiki_core::frontmatter::Frontmatter::parse(&content);
+            let body = content.get(fm.body_offset..).unwrap_or(&content);
+            let title_lower = item.title.to_lowercase();
+            let title_matches_phrase = title_lower.contains(&q_lower);
+            let title_matches_tokens = tokens.iter().all(|t| title_lower.contains(t));
+
+            let mut matched_in_file = false;
+            for (line_idx, raw_line) in body.lines().enumerate() {
+                let line_lower = raw_line.to_lowercase();
+                let exact_phrase = line_lower.contains(&q_lower);
+                let all_tokens = tokens.iter().all(|t| line_lower.contains(t));
+                if exact_phrase || all_tokens {
+                    let mut score = if exact_phrase { 100 } else { 50 };
+                    if title_matches_phrase {
+                        score += 80;
+                    } else if title_matches_tokens {
+                        score += 40;
+                    }
+                    let snippet = raw_line.trim().to_string();
+                    hits.push(WikiSearchHit {
+                        wiki: item.wiki.clone(),
+                        relative: item.relative.clone(),
+                        title: if item.title.is_empty() {
+                            item.relative.to_string_lossy().into_owned()
+                        } else {
+                            item.title.clone()
+                        },
+                        line_number: line_idx + 1,
+                        snippet,
+                        score,
+                    });
+                    matched_in_file = true;
+                    if hits.len() >= 100 {
+                        break;
+                    }
+                }
+            }
+
+            if !matched_in_file && (title_matches_phrase || title_matches_tokens) {
+                let first_line = body
+                    .lines()
+                    .find(|l| !l.trim().is_empty())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                hits.push(WikiSearchHit {
+                    wiki: item.wiki.clone(),
+                    relative: item.relative.clone(),
+                    title: item.title.clone(),
+                    line_number: 1,
+                    snippet: first_line,
+                    score: if title_matches_phrase { 90 } else { 45 },
+                });
+            }
+        }
+
+        hits.sort_by(|a, b| {
+            b.score
+                .cmp(&a.score)
+                .then_with(|| a.title.cmp(&b.title))
+                .then_with(|| a.line_number.cmp(&b.line_number))
+        });
+        hits.truncate(60);
+        self.wiki_search_hits = hits;
+    }
+
+    /// Opens the selected wiki-wide search hit (`Ctrl+W`) and jumps to the matching line.
+    pub fn open_wiki_search_selected(&mut self) {
+        let Some(hit) = self
+            .wiki_search_hits
+            .get(self.wiki_search_selected)
+            .cloned()
+        else {
+            return;
+        };
+        let query = self.wiki_search_query.trim().to_string();
+        self.mode = Mode::Normal;
+        let path_str = hit.relative.to_string_lossy().into_owned();
+        if self.load_page(&hit.wiki, &path_str, true).is_ok() {
+            self.in_page_query = query;
+            self.update_in_page_search();
+            if self.search_matches.is_empty() {
+                self.scroll = hit.line_number.saturating_sub(1);
+            }
+            self.status_message = Some(format!(
+                "Opened {} at match '{}'",
+                hit.title, self.in_page_query
+            ));
+        }
+    }
+
+    /// Creates a Quick Note inside `QuickNotes/` and optionally suspends the TUI
+    /// to open it directly in `$EDITOR` (`nvim`/`vim`).
+    pub fn create_quick_note(&mut self, name: Option<&str>, open_editor: bool) -> Result<PathBuf> {
+        let wiki = self
+            .wikis
+            .get(&self.current_wiki)
+            .ok_or_else(|| Error::other("Current wiki is not available"))?;
+
+        let raw_name = name.map(str::trim).filter(|s| !s.is_empty());
+        let relative_name = if let Some(provided) = raw_name {
+            if provided.contains('/') || provided.contains('\\') {
+                provided.to_string()
+            } else {
+                format!("QuickNotes/{provided}")
+            }
+        } else {
+            // Find the next available QuickNotes/quick-note-N.md
+            let mut idx = 1usize;
+            loop {
+                let candidate = format!("QuickNotes/quick-note-{idx}");
+                let abs = wiki.root.join(format!("{candidate}.md"));
+                if !abs.exists() {
+                    break candidate;
+                }
+                idx += 1;
+            }
+        };
+
+        self.create_page(&relative_name, PageTemplate::QuickNote)?;
+        let created_abs = wiki.root.join(&self.current_path);
+        if open_editor {
+            self.should_suspend_for_editor = Some(created_abs.clone());
+        }
+        Ok(created_abs)
+    }
+
+    /// Appends `#tag` to the currently open Markdown page, re-indexes, and reloads it.
+    pub fn add_tag_to_current_page(&mut self, raw_tag: &str) -> Result<()> {
+        let clean = raw_tag.trim().trim_start_matches('#');
+        if clean.is_empty()
+            || !clean
+                .chars()
+                .all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '/')
+        {
+            return Err(Error::other("Invalid tag name"));
+        }
+        let wiki = self
+            .wikis
+            .get(&self.current_wiki)
+            .ok_or_else(|| Error::other("Current wiki is not available"))?;
+        let abs = wiki.root.join(&self.current_path);
+        if !abs.exists() {
+            return Err(Error::other("Current page does not exist on disk"));
+        }
+        let mut content = fs::read_to_string(&abs).map_err(|e| Error::io(&abs, e))?;
+        let is_tex = abs
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("tex") || e.eq_ignore_ascii_case("latex"));
+        let tag_token = format!("#{clean}");
+        if !content.ends_with('\n') {
+            content.push('\n');
+        }
+        if is_tex {
+            content.push_str(&format!("% {tag_token}\n"));
+        } else {
+            content.push_str(&format!("\n{tag_token}\n"));
+        }
+        fs::write(&abs, &content).map_err(|e| Error::io(&abs, e))?;
+
+        let _ = terminalwiki_index::WikiIndex::open(wiki, self.config);
+        self.rebuild_fuzzy_dataset();
+        self.reload_current_page();
+        self.status_message = Some(format!("Added tag {tag_token} to {}", self.current_title));
+        Ok(())
+    }
+
+    /// Compiles the currently open `.tex` / `.latex` page using an installed
+    /// external LaTeX engine (`tectonic`, `latexmk`, `xelatex`, `lualatex`, `pdflatex`, `pandoc`).
+    pub fn compile_current_latex(&mut self, preferred_engine: Option<&str>) {
+        let Some(wiki) = self.wikis.get(&self.current_wiki) else {
+            self.status_message = Some("Current wiki is not available".to_string());
+            return;
+        };
+        let abs = wiki.root.join(&self.current_path);
+        let is_tex = abs
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("tex") || e.eq_ignore_ascii_case("latex"));
+        if !is_tex {
+            self.status_message = Some("Current page is not a .tex / .latex document".to_string());
+            return;
+        }
+        match terminalwiki_render::latex::compile_latex_file(&abs, preferred_engine) {
+            Ok(report) => {
+                self.status_message = Some(report.summary);
+            }
+            Err(err) => {
+                self.status_message = Some(err);
+            }
+        }
+    }
+
+    /// Toggles the page explorer. Opening it focuses the list on the page the
+    /// reader is currently viewing; closing it always returns to the article.
+    pub fn toggle_sidebar(&mut self) {
+        if self.sidebar_visible {
+            self.sidebar_visible = false;
+            if self.mode == Mode::Sidebar {
+                self.mode = Mode::Normal;
+            }
+        } else {
+            self.sidebar_visible = true;
+            self.mode = Mode::Sidebar;
+            self.sidebar_selected = self.current_sidebar_index().unwrap_or(0);
+        }
+    }
+
+    /// Index of the open page in the sidebar ordering.
+    pub fn current_sidebar_index(&self) -> Option<usize> {
+        self.fuzzy_dataset
+            .items()
+            .iter()
+            .position(|item| item.wiki == self.current_wiki && item.relative == self.current_path)
+    }
+
+    /// Opens the sidebar entry selected with `j`/`k`.
+    pub fn open_sidebar_selected(&mut self) -> Result<()> {
+        let Some(item) = self.fuzzy_dataset.items().get(self.sidebar_selected) else {
+            return Ok(());
+        };
+        let wiki = item.wiki.clone();
+        let relative = item.relative.to_string_lossy().into_owned();
+        self.load_page(&wiki, &relative, true)?;
+        self.mode = Mode::Normal;
+        Ok(())
+    }
+
+    /// Moves the sidebar selection by `delta`, clamped to the list.
+    pub fn sidebar_select(&mut self, delta: isize) {
+        let len = self.fuzzy_dataset.items().len();
+        if len == 0 {
+            return;
+        }
+        let next = (self.sidebar_selected as isize + delta).clamp(0, len as isize - 1);
+        self.sidebar_selected = next as usize;
+    }
+
+    /// Opens an empty page-name prompt, optionally pre-selecting the todo
+    /// template.
+    pub fn begin_new_page(&mut self, template: PageTemplate) {
+        self.mode = Mode::NewPage;
+        self.new_page_name.clear();
+        self.new_page_template = template;
+    }
+
+    /// Switches the new-page template between blank and todo list.
+    pub fn toggle_new_page_template(&mut self) {
+        self.new_page_template = self.new_page_template.toggle();
+    }
+
+    /// Creates the page named in the prompt and opens it.
+    pub fn create_page_from_input(&mut self) -> Result<()> {
+        let name = self.new_page_name.clone();
+        let template = self.new_page_template;
+        let result = if template == PageTemplate::QuickNote {
+            self.create_quick_note(Some(&name), true).map(|_| ())
+        } else {
+            self.create_page(&name, template)
+        };
+        if result.is_ok() {
+            self.mode = Mode::Normal;
+        }
+        result
+    }
+
+    /// Creates a Markdown page inside the current wiki without overwriting an
+    /// existing file. Nested paths such as `Projects/Index` are allowed, but
+    /// absolute paths and `..` components are rejected.
+    pub fn create_page(&mut self, name: &str, template: PageTemplate) -> Result<()> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err(Error::other("Page name is empty"));
+        }
+
+        let lower_trimmed = trimmed.to_ascii_lowercase();
+        let is_tex = lower_trimmed.ends_with(".tex") || lower_trimmed.ends_with(".latex");
+        let with_extension = if lower_trimmed.ends_with(".md") || is_tex {
+            trimmed.to_string()
+        } else {
+            format!("{trimmed}.md")
+        };
+        let relative = PathBuf::from(&with_extension);
+        if relative.is_absolute()
+            || relative
+                .components()
+                .any(|component| !matches!(component, Component::Normal(_)))
+        {
+            return Err(Error::other(
+                "Page name must be a relative path inside the wiki",
+            ));
+        }
+
+        let wiki = self
+            .wikis
+            .get(&self.current_wiki)
+            .ok_or_else(|| Error::other("Current wiki is not available"))?;
+        let absolute = wiki.root.join(&relative);
+        if absolute.exists() {
+            return Err(Error::other(format!(
+                "Page already exists: {}",
+                relative.display()
+            )));
+        }
+
+        let title = relative
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Untitled".to_string());
+        let body = if is_tex {
+            format!(
+                "\\documentclass{{article}}\n\\title{{{title}}}\n\\begin{{document}}\n\\maketitle\n\n\\section{{Introduction}}\n\n\\end{{document}}\n"
+            )
+        } else {
+            match template {
+                PageTemplate::Blank => format!("# {title}\n\n"),
+                PageTemplate::Todo => {
+                    format!(
+                        "# {title}\n\n- [ ] First task\n- [ ] Second task\n\n## Notes\n\n#todo\n"
+                    )
+                }
+                PageTemplate::QuickNote => {
+                    format!("# {title}\n\n#quicknote\n\n")
+                }
+            }
+        };
+
+        if let Some(parent) = absolute.parent() {
+            fs::create_dir_all(parent).map_err(|error| Error::io(parent, error))?;
+        }
+        fs::write(&absolute, body).map_err(|error| Error::io(&absolute, error))?;
+
+        let wiki_name = self.current_wiki.clone();
+        let _ = terminalwiki_index::WikiIndex::open(wiki, self.config);
+        self.rebuild_fuzzy_dataset();
+
+        let relative_string = relative.to_string_lossy().into_owned();
+        self.load_page(&wiki_name, &relative_string, true)?;
+        self.sidebar_selected = self.current_sidebar_index().unwrap_or(0);
+        self.status_message = Some(format!("Created {relative_string}"));
+        Ok(())
     }
 
     pub fn update_command_suggestions(&mut self) {
@@ -432,6 +1258,15 @@ impl<'a> App<'a> {
                     self.update_finder_filter();
                 }
             }
+            "wsearch" | "grep" => {
+                self.mode = Mode::WikiSearch;
+                self.wiki_search_query = if parts.len() > 1 {
+                    parts[1..].join(" ")
+                } else {
+                    String::new()
+                };
+                self.update_wiki_search();
+            }
             "backlinks" => {
                 self.load_backlinks();
                 self.mode = Mode::Backlinks;
@@ -452,6 +1287,51 @@ impl<'a> App<'a> {
                 self.open_graph_at_depth(depth.clamp(1, 5));
             }
             "edit" => self.open_current_in_editor(),
+            "new" => {
+                if parts.len() > 1 {
+                    let page = parts[1..].join(" ");
+                    if let Err(error) = self.create_page(&page, PageTemplate::Blank) {
+                        self.status_message = Some(error.to_string());
+                    }
+                } else {
+                    self.begin_new_page(PageTemplate::Blank);
+                }
+            }
+            "quicknote" | "qn" => {
+                let name = (parts.len() > 1).then(|| parts[1..].join(" "));
+                if let Err(error) = self.create_quick_note(name.as_deref(), true) {
+                    self.status_message = Some(error.to_string());
+                }
+            }
+            "todo" => {
+                if parts.len() > 1 {
+                    let page = parts[1..].join(" ");
+                    if let Err(error) = self.create_page(&page, PageTemplate::Todo) {
+                        self.status_message = Some(error.to_string());
+                    }
+                } else {
+                    self.begin_new_page(PageTemplate::Todo);
+                }
+            }
+            "tag" => {
+                if parts.len() > 1 {
+                    let tag = parts[1];
+                    if let Err(error) = self.add_tag_to_current_page(tag) {
+                        self.status_message = Some(error.to_string());
+                    }
+                } else {
+                    self.mode = Mode::TagPrompt;
+                    self.tag_input.clear();
+                }
+            }
+            "sidebar" => self.toggle_sidebar(),
+            "tree" => self.toggle_sidebar_mode(),
+            "zen" => self.toggle_zen_mode(),
+            "wikipedia" | "layout" => self.toggle_wikipedia_layout(),
+            "latex" | "compile" => {
+                let engine = parts.get(1).copied();
+                self.compile_current_latex(engine);
+            }
             "reload" => {
                 let p = self.current_path.to_string_lossy().into_owned();
                 let _ = self.load_page(&self.current_wiki.clone(), &p, false);
@@ -635,6 +1515,13 @@ impl<'a> App<'a> {
         for wiki in self.wikis.iter() {
             if let Ok(idx) = terminalwiki_index::WikiIndex::load(&wiki.name) {
                 for e in &idx.entries {
+                    if e.relative.file_name()
+                        == Some(std::ffi::OsStr::new(
+                            terminalwiki_core::config::WIKI_CONFIG_FILE,
+                        ))
+                    {
+                        continue;
+                    }
                     items.push(FuzzyItem {
                         wiki: wiki.name.clone(),
                         relative: e.relative.clone(),
@@ -646,6 +1533,9 @@ impl<'a> App<'a> {
             }
         }
         self.fuzzy_dataset = FuzzyDataset::new(items);
+        self.sidebar_selected = self
+            .sidebar_selected
+            .min(self.fuzzy_dataset.items().len().saturating_sub(1));
         if self.mode == Mode::Finder {
             self.update_finder_filter();
         }
@@ -796,4 +1686,25 @@ impl<'a> App<'a> {
             self.should_suspend_for_editor = Some(full_path);
         }
     }
+}
+
+/// Splits a finder query into free text and tag filters.
+///
+/// Both `#security` and `tag:security` are accepted; every tag must match.
+/// The text remainder is still fuzzy-matched against titles and paths.
+fn split_finder_query(query: &str) -> (String, Vec<String>) {
+    let mut text = Vec::new();
+    let mut tags = Vec::new();
+    for token in query.split_whitespace() {
+        let tag = token
+            .strip_prefix('#')
+            .or_else(|| token.strip_prefix("tag:"))
+            .map(|tag| tag.trim_start_matches('#'));
+        match tag {
+            Some(tag) if !tag.is_empty() => tags.push(tag.to_string()),
+            Some(_) => {}
+            None => text.push(token),
+        }
+    }
+    (text.join(" "), tags)
 }

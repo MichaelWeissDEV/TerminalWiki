@@ -76,31 +76,11 @@ fn display_file(path: &Path, plain: bool, no_color: bool, config: &Config) -> Re
         detect_color_mode()
     };
 
-    let doc = if is_latex_source(path) {
-        let source = String::from_utf8_lossy(&bytes);
-        let latex = terminalwiki_latex::parse_tex_document(&source)
-            .map_err(|error| Error::other(format!("Could not parse LaTeX: {error}")))?;
-        for warning in &latex.warnings {
-            eprintln!("LaTeX warning: {}", sanitize_line(&warning.message));
-        }
-        let semantic = terminalwiki_latex::adapt_document(&latex);
-        terminalwiki_render::Renderer::new(config.render.max_content_width, &theme, color_mode)
-            .render_document(&semantic)
-    } else {
-        render_path(path, &bytes, config, &theme, color_mode)
-    };
+    let doc = render_path(path, &bytes, config, &theme, color_mode);
     write_document(&doc, &mut std::io::stdout(), color_mode)
         .map_err(|e| Error::other(format!("Write error: {e}")))?;
 
     Ok(())
-}
-
-fn is_latex_source(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            extension.eq_ignore_ascii_case("tex") || extension.eq_ignore_ascii_case("latex")
-        })
 }
 
 fn render_wiki_overview(

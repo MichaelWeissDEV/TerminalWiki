@@ -37,11 +37,13 @@ pub enum Color {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Style {
     pub fg: Option<Color>,
+    pub bg: Option<Color>,
     pub bold: bool,
     pub italic: bool,
     pub dim: bool,
     pub underline: bool,
     pub strikethrough: bool,
+    pub reverse: bool,
 }
 
 impl Style {
@@ -56,6 +58,15 @@ impl Style {
 
     pub fn with_fg(self, c: Color) -> Self {
         self.fg(c)
+    }
+
+    pub fn bg(mut self, c: Color) -> Self {
+        self.bg = Some(c);
+        self
+    }
+
+    pub fn with_bg(self, c: Color) -> Self {
+        self.bg(c)
     }
 
     pub fn bold(mut self) -> Self {
@@ -103,6 +114,15 @@ impl Style {
         self.strikethrough()
     }
 
+    pub fn reverse(mut self) -> Self {
+        self.reverse = true;
+        self
+    }
+
+    pub fn with_reverse(self) -> Self {
+        self.reverse()
+    }
+
     /// Wraps `text` with the ANSI codes for this style.
     ///
     /// Text is sanitized first so no untrusted content can inject escape
@@ -122,6 +142,9 @@ impl Style {
         }
         if self.underline {
             prefix.push_str("\x1b[4m");
+        }
+        if self.reverse {
+            prefix.push_str("\x1b[7m");
         }
         if self.strikethrough {
             prefix.push_str("\x1b[9m");
@@ -149,6 +172,29 @@ impl Style {
                 Color::Index(i) => prefix.push_str(&format!("\x1b[38;5;{}m", i)),
             }
         }
+        if let Some(c) = self.bg {
+            match c {
+                Color::Reset => prefix.push_str("\x1b[49m"),
+                Color::Black => prefix.push_str("\x1b[40m"),
+                Color::Red => prefix.push_str("\x1b[41m"),
+                Color::Green => prefix.push_str("\x1b[42m"),
+                Color::Yellow => prefix.push_str("\x1b[43m"),
+                Color::Blue => prefix.push_str("\x1b[44m"),
+                Color::Magenta => prefix.push_str("\x1b[45m"),
+                Color::Cyan => prefix.push_str("\x1b[46m"),
+                Color::White => prefix.push_str("\x1b[47m"),
+                Color::BrightBlack => prefix.push_str("\x1b[100m"),
+                Color::BrightRed => prefix.push_str("\x1b[101m"),
+                Color::BrightGreen => prefix.push_str("\x1b[102m"),
+                Color::BrightYellow => prefix.push_str("\x1b[103m"),
+                Color::BrightBlue => prefix.push_str("\x1b[104m"),
+                Color::BrightMagenta => prefix.push_str("\x1b[105m"),
+                Color::BrightCyan => prefix.push_str("\x1b[106m"),
+                Color::BrightWhite => prefix.push_str("\x1b[107m"),
+                Color::Rgb(r, g, b) => prefix.push_str(&format!("\x1b[48;2;{};{};{}m", r, g, b)),
+                Color::Index(i) => prefix.push_str(&format!("\x1b[48;5;{}m", i)),
+            }
+        }
         if prefix.is_empty() {
             safe
         } else {
@@ -159,11 +205,13 @@ impl Style {
     /// True when this style has no visible effect.
     pub fn is_plain(&self) -> bool {
         self.fg.is_none()
+            && self.bg.is_none()
             && !self.bold
             && !self.italic
             && !self.dim
             && !self.underline
             && !self.strikethrough
+            && !self.reverse
     }
 }
 

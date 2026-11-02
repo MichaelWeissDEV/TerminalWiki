@@ -52,7 +52,10 @@ impl ContentType {
 
     /// Whether this class participates in the wiki's page namespace.
     pub fn is_page(self) -> bool {
-        matches!(self, ContentType::Markdown | ContentType::Text)
+        matches!(
+            self,
+            ContentType::Markdown | ContentType::Text | ContentType::Latex
+        )
     }
 
     /// Whether full text is worth indexing for this class.
