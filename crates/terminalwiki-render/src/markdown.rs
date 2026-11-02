@@ -33,6 +33,7 @@ pub fn parse_markdown(text: &str) -> Document {
     let mut current_code_block: Option<Option<String>> = None;
     let mut current_code_content = String::new();
     let mut footnote_stack = Vec::new();
+    let mut list_stack: Vec<(bool, u64, Vec<Vec<Block>>)> = Vec::new();
 
     // Table state
     let mut in_table = false;
@@ -129,27 +130,36 @@ pub fn parse_markdown(text: &str) -> Document {
 
             // ─── Lists ───────────────────────────────────────────────────────────
             Event::Start(Tag::List(first_item_number)) => {
-                block_stack.push(Vec::new());
-                let _ = first_item_number;
+                list_stack.push((
+                    first_item_number.is_some(),
+                    first_item_number.unwrap_or(1),
+                    Vec::new(),
+                ));
             }
-            Event::End(TagEnd::List(ordered)) => {
-                let items = block_stack.pop().unwrap_or_default();
-                let list_items: Vec<Vec<Block>> = items.into_iter().map(|b| vec![b]).collect();
+            Event::End(TagEnd::List(_)) => {
+                let Some((ordered, start, items)) = list_stack.pop() else {
+                    continue;
+                };
                 block_stack.last_mut().unwrap().push(Block::List {
                     ordered,
-                    start: 1,
-                    items: list_items,
+                    start,
+                    items,
                 });
             }
             Event::Start(Tag::Item) => {
                 block_stack.push(Vec::new());
+                // Tight CommonMark list items do not emit paragraph events.
+                // Give such direct inline events an item-local buffer.
+                inline_stack.push(Vec::new());
             }
             Event::End(TagEnd::Item) => {
-                let item_blocks = block_stack.pop().unwrap_or_default();
-                if let Some(parent) = block_stack.last_mut() {
-                    if !item_blocks.is_empty() {
-                        parent.extend(item_blocks);
-                    }
+                let mut item_blocks = block_stack.pop().unwrap_or_default();
+                let loose_inlines = inline_stack.pop().unwrap_or_default();
+                if !loose_inlines.is_empty() {
+                    item_blocks.insert(0, Block::Paragraph(loose_inlines));
+                }
+                if let Some((_, _, items)) = list_stack.last_mut() {
+                    items.push(item_blocks);
                 }
             }
 
@@ -317,8 +327,63 @@ pub fn parse_markdown(text: &str) -> Document {
         }
     }
 
-    doc.blocks = normalize_callouts(block_stack.pop().unwrap_or_default());
+    doc.blocks = normalize_tasks(normalize_callouts(block_stack.pop().unwrap_or_default()));
     doc
+}
+
+fn normalize_tasks(blocks: Vec<Block>) -> Vec<Block> {
+    blocks
+        .into_iter()
+        .map(|block| match block {
+            Block::List {
+                ordered,
+                start,
+                items,
+            } => Block::List {
+                ordered,
+                start,
+                items: items
+                    .into_iter()
+                    .map(|item| {
+                        let mut item = normalize_tasks(item);
+                        if let Some(Block::Paragraph(inlines)) = item.first() {
+                            if let Some((checked, content)) = task_item(inlines) {
+                                item[0] = Block::TaskItem { checked, content };
+                            }
+                        }
+                        item
+                    })
+                    .collect(),
+            },
+            Block::BlockQuote(content) => Block::BlockQuote(normalize_tasks(content)),
+            Block::Callout {
+                kind,
+                title,
+                content,
+            } => Block::Callout {
+                kind,
+                title,
+                content: normalize_tasks(content),
+            },
+            Block::FootnoteDefinition { name, content } => Block::FootnoteDefinition {
+                name,
+                content: normalize_tasks(content),
+            },
+            other => other,
+        })
+        .collect()
+}
+
+fn task_item(inlines: &[Inline]) -> Option<(bool, Vec<Inline>)> {
+    let Inline::Text(marker) = inlines.first()? else {
+        return None;
+    };
+    let checked = match marker.as_str() {
+        "[ ] " => false,
+        "[x] " | "[X] " => true,
+        _ => return None,
+    };
+    Some((checked, inlines[1..].to_vec()))
 }
 
 /// Converts block quotes whose first line is an Obsidian callout header into a
@@ -721,10 +786,34 @@ mod tests {
 
     #[test]
     fn test_lists_and_tasks() {
-        let md = "- [ ] Task 1\n- [x] Task 2\n- Item 3";
+        let md = "3. [ ] Task 1\n4. [x] Task 2\n   - Nested item\n5. Item 3";
         let doc = parse_markdown(md);
         assert_eq!(doc.blocks.len(), 1);
-        assert!(matches!(&doc.blocks[0], Block::List { .. }));
+        match &doc.blocks[0] {
+            Block::List {
+                ordered,
+                start,
+                items,
+            } => {
+                assert!(*ordered);
+                assert_eq!(*start, 3);
+                assert!(
+                    matches!(
+                        items[0].as_slice(),
+                        [Block::TaskItem { checked: false, .. }]
+                    ),
+                    "{doc:?}"
+                );
+                assert!(
+                    matches!(
+                        items[1].as_slice(),
+                        [Block::TaskItem { checked: true, .. }, Block::List { .. }]
+                    ),
+                    "{doc:?}"
+                );
+            }
+            other => panic!("expected list, got {other:?}"),
+        }
     }
 
     #[test]
