@@ -203,6 +203,52 @@ mod frontmatter_render_tests {
     }
 
     #[test]
+    fn highlights_and_task_glyphs_are_rendered() {
+        let doc = render_markdown_raw(
+            "- [x] done\n\nA ==marked== word.\n",
+            &Config::default(),
+            &Theme::Mono,
+            ColorMode::Never,
+        );
+        let plain = doc
+            .lines
+            .iter()
+            .map(|line| {
+                line.iter()
+                    .map(|span| span.text.as_str())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(plain.contains("☑ done"), "task glyph missing:\n{plain}");
+        assert!(plain.contains("marked"), "highlight text missing:\n{plain}");
+        assert!(!plain.contains("=="), "highlight markers leaked:\n{plain}");
+    }
+
+    #[test]
+    fn duplicate_headings_receive_unique_suffix_anchors() {
+        let doc = render_markdown_raw(
+            "# Setup\n\n## Setup\n\n## Setup\n",
+            &Config::default(),
+            &Theme::Mono,
+            ColorMode::Never,
+        );
+        let anchors: Vec<&str> = doc.headings.iter().map(|h| h.anchor.as_str()).collect();
+        assert_eq!(anchors, ["setup", "setup-1", "setup-2"]);
+    }
+
+    #[test]
+    fn heading_anchor_ignores_punctuation_and_case() {
+        let doc = render_markdown_raw(
+            "## Target Heading!\n",
+            &Config::default(),
+            &Theme::Mono,
+            ColorMode::Never,
+        );
+        assert_eq!(doc.headings[0].anchor, "target-heading");
+    }
+
+    #[test]
     fn footnote_definitions_are_visible_in_terminal_output() {
         let out = render_to_text("Text[^n].\n\n[^n]: Footnote body.\n");
         assert!(out.contains("[^n]"), "footnote marker missing:\n{out}");

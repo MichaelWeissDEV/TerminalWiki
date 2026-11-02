@@ -43,6 +43,9 @@ pub struct RenderedLink {
 pub struct RenderedHeading {
     pub level: usize,
     pub text: String,
+    /// Unique GitHub-compatible anchor for heading navigation. Duplicate
+    /// heading text receives deterministic `-1`, `-2`, … suffixes.
+    pub anchor: String,
     pub line: usize,
 }
 
@@ -70,6 +73,8 @@ pub enum Inline {
         target: String,
         label: Option<String>,
     },
+    /// Obsidian-style `==highlighted==` text.
+    Highlight(Vec<Inline>),
     Footnote(String),
     Math(String),
 }
@@ -81,6 +86,7 @@ impl Inline {
             Inline::Bold(inner)
             | Inline::Italic(inner)
             | Inline::Strike(inner)
+            | Inline::Highlight(inner)
             | Inline::Link { text: inner, .. } => inner.iter().map(|i| i.plain_text()).collect(),
             Inline::WikiLink { target, label } => label.clone().unwrap_or_else(|| target.clone()),
         }

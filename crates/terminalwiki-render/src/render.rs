@@ -1,5 +1,8 @@
 //! Rendering semantic Document AST into terminal Spans and RenderedLines (spec §55, §60).
 
+use std::collections::HashMap;
+
+use terminalwiki_core::link::heading_anchor;
 use terminalwiki_core::unicode::{display_width, pad_display_width};
 
 use crate::ansi::{ColorMode, Style};
@@ -28,9 +31,10 @@ impl<'a> Renderer<'a> {
 
     pub fn render_document(&self, doc: &Document) -> RenderedDocument {
         let mut rdoc = RenderedDocument::default();
+        let mut heading_anchors = HashMap::new();
 
         for (idx, block) in doc.blocks.iter().enumerate() {
-            self.render_block(block, &mut rdoc, 0);
+            self.render_block(block, &mut rdoc, 0, &mut heading_anchors);
             if idx + 1 < doc.blocks.len() {
                 rdoc.lines.push(Vec::new()); // blank line separation between top-level blocks
             }
@@ -39,16 +43,36 @@ impl<'a> Renderer<'a> {
         rdoc
     }
 
-    fn render_block(&self, block: &Block, rdoc: &mut RenderedDocument, indent_level: usize) {
+    fn render_block(
+        &self,
+        block: &Block,
+        rdoc: &mut RenderedDocument,
+        indent_level: usize,
+        heading_anchors: &mut HashMap<String, usize>,
+    ) {
         let indent = "  ".repeat(indent_level);
 
         match block {
             Block::Heading(level, inlines) => {
                 let text = inlines.iter().map(|i| i.plain_text()).collect::<String>();
                 let current_line = rdoc.lines.len();
+                let base_anchor = heading_anchor(&text);
+                let base_anchor = if base_anchor.is_empty() {
+                    "section".to_string()
+                } else {
+                    base_anchor
+                };
+                let occurrence = heading_anchors.entry(base_anchor.clone()).or_insert(0);
+                let anchor = if *occurrence == 0 {
+                    base_anchor
+                } else {
+                    format!("{base_anchor}-{occurrence}")
+                };
+                *occurrence += 1;
                 rdoc.headings.push(RenderedHeading {
                     level: *level,
                     text: text.clone(),
+                    anchor,
                     line: current_line,
                 });
 
@@ -120,7 +144,7 @@ impl<'a> Renderer<'a> {
                 let quote_style = self.theme.style(SemanticColor::Muted);
                 for b in blocks {
                     let mut sub_rdoc = RenderedDocument::default();
-                    self.render_block(b, &mut sub_rdoc, 0);
+                    self.render_block(b, &mut sub_rdoc, 0, heading_anchors);
                     for line in sub_rdoc.lines {
                         let mut row = vec![Span {
                             text: quote_prefix.clone(),
@@ -152,7 +176,7 @@ impl<'a> Renderer<'a> {
 
                 for b in content {
                     let mut sub_rdoc = RenderedDocument::default();
-                    self.render_block(b, &mut sub_rdoc, 0);
+                    self.render_block(b, &mut sub_rdoc, 0, heading_anchors);
                     for line in sub_rdoc.lines {
                         let mut row = vec![Span {
                             text: format!("{indent}│  "),
@@ -176,7 +200,7 @@ impl<'a> Renderer<'a> {
                 }]);
                 for block in content {
                     let mut sub_rdoc = RenderedDocument::default();
-                    self.render_block(block, &mut sub_rdoc, 0);
+                    self.render_block(block, &mut sub_rdoc, 0, heading_anchors);
                     for line in sub_rdoc.lines {
                         let mut row = vec![Span {
                             text: format!("{indent}  "),
@@ -194,7 +218,7 @@ impl<'a> Renderer<'a> {
                 items,
             } => {
                 for (i, item) in items.iter().enumerate() {
-                    let marker = if *ordered {
+                    let mut marker = if *ordered {
                         let num = start + i as u64;
                         format!("{indent}{num}. ")
                     } else {
@@ -202,21 +226,46 @@ impl<'a> Renderer<'a> {
                     };
                     let marker_style = self.theme.style(SemanticColor::Accent);
 
-                    for (b_idx, b) in item.iter().enumerate() {
+                    // Obsidian task items replace the bullet with a checkbox
+                    // glyph rather than showing a bullet and a `[ ]` marker.
+                    let mut body: &[Block] = item;
+                    let mut task_content: Option<Vec<Span>> = None;
+                    if let Some(Block::TaskItem { checked, content }) = item.first() {
+                        let glyph = if *checked { "☑" } else { "☐" };
+                        marker = format!("{indent}{glyph} ");
+                        task_content = Some(self.render_inlines(content, rdoc));
+                        body = &item[1..];
+                    }
+
+                    let padding = " ".repeat(display_width(&marker));
+                    let mut emitted_marker = false;
+
+                    if let Some(content) = task_content {
+                        let mut row = vec![Span {
+                            text: marker.clone(),
+                            style: marker_style.clone(),
+                        }];
+                        row.extend(content);
+                        rdoc.lines.push(row);
+                        emitted_marker = true;
+                    }
+
+                    for b in body {
                         let mut sub_rdoc = RenderedDocument::default();
-                        self.render_block(b, &mut sub_rdoc, 0);
-                        for (l_idx, line) in sub_rdoc.lines.into_iter().enumerate() {
+                        self.render_block(b, &mut sub_rdoc, 0, heading_anchors);
+                        for line in sub_rdoc.lines {
                             let mut row = Vec::new();
-                            if b_idx == 0 && l_idx == 0 {
+                            if emitted_marker {
+                                row.push(Span {
+                                    text: padding.clone(),
+                                    style: Style::new(),
+                                });
+                            } else {
                                 row.push(Span {
                                     text: marker.clone(),
                                     style: marker_style.clone(),
                                 });
-                            } else {
-                                row.push(Span {
-                                    text: " ".repeat(marker.len()),
-                                    style: Style::new(),
-                                });
+                                emitted_marker = true;
                             }
                             row.extend(line);
                             rdoc.lines.push(row);
@@ -330,6 +379,12 @@ impl<'a> Renderer<'a> {
                 Inline::Strike(inner) => {
                     for mut s in self.render_inlines_at(inner, rdoc, start_column) {
                         s.style.strikethrough = true;
+                        spans.push(s);
+                    }
+                }
+                Inline::Highlight(inner) => {
+                    for mut s in self.render_inlines_at(inner, rdoc, start_column) {
+                        s.style = self.theme.style(SemanticColor::Selection).bold();
                         spans.push(s);
                     }
                 }

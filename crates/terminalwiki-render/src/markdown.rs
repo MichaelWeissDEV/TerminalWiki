@@ -280,7 +280,7 @@ pub fn parse_markdown(text: &str) -> Document {
                 if current_code_block.is_some() {
                     current_code_content.push_str(&t);
                 } else {
-                    parse_wiki_links_in_text(&t, inline_stack.last_mut().unwrap());
+                    parse_inline_extensions(&t, inline_stack.last_mut().unwrap());
                 }
             }
             Event::Code(t) => {
@@ -503,64 +503,234 @@ fn callout_title(value: &str) -> Option<String> {
     (!value.is_empty()).then(|| value.to_string())
 }
 
+/// Sentinel characters that carry an Obsidian `==highlight==` span through
+/// pulldown-cmark. Private-use code points are used so ordinary text cannot
+/// accidentally produce them.
+const HIGHLIGHT_START: char = '\u{E000}';
+const HIGHLIGHT_END: char = '\u{E001}';
+
 fn normalize_math_delimiters(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
     let mut output = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-    let mut in_inline_code = false;
-    let mut in_fence = false;
+    let mut i = 0;
     let mut at_line_start = true;
-    while let Some(ch) = chars.next() {
-        if at_line_start && (ch == '`' || ch == '~') {
-            let mut marker = String::from(ch);
-            while chars.peek() == Some(&ch) && marker.len() < 3 {
-                marker.push(chars.next().unwrap_or(ch));
+    let mut in_fence = false;
+    let mut fence_char = '`';
+    let mut fence_len = 0;
+    let mut inline_code_ticks = 0usize;
+    let mut in_highlight = false;
+
+    while i < chars.len() {
+        let ch = chars[i];
+
+        // ── fenced code: copy verbatim until the matching closing fence ──────
+        if in_fence {
+            if at_line_start && ch == fence_char {
+                let mut run = 0;
+                while i + run < chars.len() && chars[i + run] == fence_char {
+                    run += 1;
+                }
+                if run >= fence_len {
+                    in_fence = false;
+                    for offset in 0..run {
+                        output.push(chars[i + offset]);
+                    }
+                    i += run;
+                    at_line_start = false;
+                    continue;
+                }
             }
-            if marker.len() == 3 {
-                in_fence = !in_fence;
-            }
-            output.push_str(&marker);
-            at_line_start = false;
-            continue;
-        }
-        if !in_fence && ch == '`' {
-            in_inline_code = !in_inline_code;
             output.push(ch);
+            at_line_start = ch == '\n';
+            i += 1;
+            continue;
+        }
+
+        // ── opening fence at line start ──────────────────────────────────────
+        if at_line_start && (ch == '`' || ch == '~') {
+            let mut run = 0;
+            while i + run < chars.len() && chars[i + run] == ch {
+                run += 1;
+            }
+            if run >= 3 {
+                in_fence = true;
+                fence_char = ch;
+                fence_len = run;
+            } else if ch == '`' {
+                // A short backtick run at line start still opens/closes an
+                // inline code span; only three or more start a fence.
+                if inline_code_ticks == 0 {
+                    inline_code_ticks = run;
+                } else if run == inline_code_ticks {
+                    inline_code_ticks = 0;
+                }
+            }
+            for offset in 0..run {
+                output.push(chars[i + offset]);
+            }
+            i += run;
             at_line_start = false;
             continue;
         }
-        if !in_fence && !in_inline_code && ch == '\\' {
-            match chars.peek().copied() {
-                Some('(') => {
-                    chars.next();
+
+        // ── inline code spans ────────────────────────────────────────────────
+        if ch == '`' {
+            let mut run = 0;
+            while i + run < chars.len() && chars[i + run] == '`' {
+                run += 1;
+            }
+            if inline_code_ticks == 0 {
+                inline_code_ticks = run;
+            } else if run == inline_code_ticks {
+                inline_code_ticks = 0;
+            }
+            for offset in 0..run {
+                output.push(chars[i + offset]);
+            }
+            i += run;
+            at_line_start = false;
+            continue;
+        }
+
+        // ── Obsidian comments: `%%…%%` disappears from rendered output ───────
+        if inline_code_ticks == 0 && ch == '%' && chars.get(i + 1) == Some(&'%') {
+            i += 2;
+            while i < chars.len() {
+                if chars[i] == '%' && chars.get(i + 1) == Some(&'%') {
+                    i += 2;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+
+        // ── math delimiter normalization outside code ────────────────────────
+        if inline_code_ticks == 0 && ch == '\\' {
+            match chars.get(i + 1).copied() {
+                Some('(') | Some(')') => {
                     output.push('$');
+                    i += 2;
                     at_line_start = false;
                     continue;
                 }
-                Some(')') => {
-                    chars.next();
-                    output.push('$');
-                    at_line_start = false;
-                    continue;
-                }
-                Some('[') => {
-                    chars.next();
+                Some('[') | Some(']') => {
                     output.push_str("$$");
-                    at_line_start = false;
-                    continue;
-                }
-                Some(']') => {
-                    chars.next();
-                    output.push_str("$$");
+                    i += 2;
                     at_line_start = false;
                     continue;
                 }
                 _ => {}
             }
         }
+
+        // ── `==highlight==` (not a setext underline, same line only) ─────────
+        if inline_code_ticks == 0 && ch == '=' && chars.get(i + 1) == Some(&'=') {
+            if in_highlight {
+                output.push(HIGHLIGHT_END);
+                in_highlight = false;
+                i += 2;
+                at_line_start = false;
+                continue;
+            }
+            let is_setext = at_line_start && is_setext_underline(&chars, i);
+            if !is_setext && has_closing_highlight(&chars, i) {
+                output.push(HIGHLIGHT_START);
+                in_highlight = true;
+                i += 2;
+                at_line_start = false;
+                continue;
+            }
+        }
+
+        if ch == '\n' && in_highlight {
+            // A highlight never spans a line; close it defensively.
+            output.push(HIGHLIGHT_END);
+            in_highlight = false;
+        }
         at_line_start = ch == '\n';
         output.push(ch);
+        i += 1;
+    }
+
+    if in_highlight {
+        output.push(HIGHLIGHT_END);
     }
     output
+}
+
+/// True when the `=` run beginning at `start` is the entire line, i.e. a
+/// setext heading underline rather than an inline highlight.
+fn is_setext_underline(chars: &[char], start: usize) -> bool {
+    let mut i = start;
+    while i < chars.len() && chars[i] == '=' {
+        i += 1;
+    }
+    while i < chars.len() && chars[i] != '\n' {
+        if chars[i] != ' ' && chars[i] != '\t' {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
+/// True when a non-empty `==…==` span closes later on the same line.
+fn has_closing_highlight(chars: &[char], start: usize) -> bool {
+    let mut i = start + 2;
+    if i >= chars.len() || chars[i] == '=' || chars[i] == '\n' {
+        return false;
+    }
+    while i + 1 < chars.len() {
+        if chars[i] == '\n' {
+            return false;
+        }
+        if chars[i] == '=' && chars[i + 1] == '=' {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Splits a text chunk on highlight sentinels, then parses wiki links inside
+/// each segment. Highlight content without nested formatting is the common
+/// Obsidian case; sentinel pairs that span pulldown events degrade to plain
+/// text instead of leaking private-use characters.
+fn parse_inline_extensions(text: &str, inlines: &mut Vec<Inline>) {
+    let mut rest = text;
+    let mut highlighted = false;
+    loop {
+        let marker = if highlighted {
+            HIGHLIGHT_END
+        } else {
+            HIGHLIGHT_START
+        };
+        match rest.find(marker) {
+            Some(position) => {
+                push_inline_segment(&rest[..position], inlines, highlighted);
+                highlighted = !highlighted;
+                rest = &rest[position + marker.len_utf8()..];
+            }
+            None => {
+                push_inline_segment(rest, inlines, highlighted);
+                break;
+            }
+        }
+    }
+}
+
+fn push_inline_segment(segment: &str, inlines: &mut Vec<Inline>, highlighted: bool) {
+    if segment.is_empty() {
+        return;
+    }
+    if highlighted {
+        let mut inner = Vec::new();
+        parse_wiki_links_in_text(segment, &mut inner);
+        inlines.push(Inline::Highlight(inner));
+    } else {
+        parse_wiki_links_in_text(segment, inlines);
+    }
 }
 
 /// Parses inline `[[WikiLink]]` occurrences from raw text chunks.
@@ -695,6 +865,43 @@ mod tests {
             Some(Block::FootnoteDefinition { name, content })
                 if name == "note" && !content.is_empty()
         ));
+    }
+
+    #[test]
+    fn parses_obsidian_highlights_and_hides_comments() {
+        let doc = parse_markdown("A ==marked== word. %%hidden%% After.\n");
+        match &doc.blocks[0] {
+            Block::Paragraph(inlines) => {
+                let text = inlines
+                    .iter()
+                    .map(|inline| inline.plain_text())
+                    .collect::<String>();
+                assert_eq!(text, "A marked word.  After.");
+                assert!(inlines.iter().any(|inline| matches!(
+                    inline,
+                    Inline::Highlight(inner)
+                        if inner.iter().any(|item| item.plain_text() == "marked")
+                )));
+                assert!(!text.contains("hidden"));
+            }
+            other => panic!("expected paragraph, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn comments_and_highlights_do_not_touch_code() {
+        let doc = parse_markdown("`%%keep%% ==raw==`\n\n```\n==fenced== %%fenced%%\n```\n");
+        let rendered = format!("{doc:?}");
+        assert!(rendered.contains("%%keep%%"), "{rendered}");
+        assert!(rendered.contains("==raw=="));
+        assert!(rendered.contains("==fenced=="));
+        assert!(rendered.contains("%%fenced%%"));
+    }
+
+    #[test]
+    fn setext_underline_is_not_a_highlight() {
+        let doc = parse_markdown("Title\n=====\n");
+        assert!(matches!(doc.blocks.as_slice(), [Block::Heading(1, _)]));
     }
 
     #[test]

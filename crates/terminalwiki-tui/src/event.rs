@@ -207,11 +207,7 @@ fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<()> {
 /// on the same heading regardless of title casing or punctuation.
 fn jump_to_anchor(app: &mut App, anchor: &str) {
     let wanted = terminalwiki_core::link::heading_anchor(anchor);
-    if let Some(heading) = app
-        .headings
-        .iter()
-        .find(|heading| terminalwiki_core::link::heading_anchor(&heading.text) == wanted)
-    {
+    if let Some(heading) = app.headings.iter().find(|heading| heading.anchor == wanted) {
         app.scroll = heading.line;
         app.status_message = Some(format!("Jumped to {}", heading.text));
     } else {
