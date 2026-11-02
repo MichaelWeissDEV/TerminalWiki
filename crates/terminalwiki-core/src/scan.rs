@@ -18,7 +18,7 @@ use crate::wiki::Wiki;
 pub const IGNORE_FILE: &str = ".twignore";
 
 /// Directories that are never part of a knowledge base.
-const ALWAYS_IGNORED_DIRS: &[&str] = &[".git", ".hg", ".svn", ".jj"];
+const ALWAYS_IGNORED_DIRS: &[&str] = &[".git", ".hg", ".svn", ".jj", ".trash"];
 
 /// One file discovered by a scan.
 #[derive(Debug, Clone)]
@@ -140,6 +140,15 @@ pub fn scan(wiki: &Wiki, config: &IndexConfig) -> Vec<ScannedFile> {
         let Ok(relative) = path.strip_prefix(&wiki.root) else {
             continue;
         };
+
+        // Unless config.hidden is true, ignore any file in a dot-directory or starting with '.'
+        if !config.hidden
+            && relative.components().any(|c| {
+                matches!(c, std::path::Component::Normal(n) if n.to_string_lossy().starts_with('.'))
+            })
+        {
+            continue;
+        }
 
         let content_type = filetype::classify_by_extension(path).unwrap_or(ContentType::Text);
         if content_type == ContentType::Code && !config.code {
@@ -367,5 +376,38 @@ mod tests {
         // 2026-08-14 18:42:00 UTC
         assert_eq!(format_timestamp(1_786_732_920), "2026-08-14 18:42:00");
         assert_eq!(format_timestamp(0), "1970-01-01 00:00:00");
+    }
+
+    #[test]
+    fn dot_directories_and_obsidian_are_ignored_by_default() {
+        let base = tmpdir("dotignore");
+        fs::write(base.join("Note.md"), "hello").unwrap();
+        fs::create_dir_all(base.join(".obsidian")).unwrap();
+        fs::write(base.join(".obsidian").join("workspace.json"), "{}").unwrap();
+        fs::create_dir_all(base.join(".trash")).unwrap();
+        fs::write(base.join(".trash").join("deleted.md"), "deleted").unwrap();
+        fs::create_dir_all(base.join(".git")).unwrap();
+        fs::write(base.join(".git").join("config"), "git").unwrap();
+
+        let cfg = IndexConfig {
+            hidden: false,
+            ..Default::default()
+        };
+        let files = scan(&open(&base), &cfg);
+        assert_eq!(names(&files), vec!["Note.md"]);
+
+        // When hidden is explicitly true, .obsidian and .trash are scanned, but .git remains ignored
+        let cfg_hidden = IndexConfig {
+            hidden: true,
+            ..Default::default()
+        };
+        let files_hidden = scan(&open(&base), &cfg_hidden);
+        let n = names(&files_hidden);
+        assert!(
+            n.contains(&".obsidian/workspace.json".to_string())
+                || n.contains(&".trash/deleted.md".to_string())
+        );
+        assert!(!n.iter().any(|name| name.starts_with(".git")));
+        fs::remove_dir_all(&base).ok();
     }
 }

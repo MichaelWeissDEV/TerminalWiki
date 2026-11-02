@@ -154,6 +154,17 @@ impl<'a> Renderer<'a> {
 
             Block::CodeBlock { language, content } => {
                 if let Some(lang) = language.as_deref() {
+                    if lang.eq_ignore_ascii_case("math") || lang.eq_ignore_ascii_case("latex-math")
+                    {
+                        let layout = layout_math(content.trim());
+                        for line in layout.lines {
+                            rdoc.lines.push(vec![Span {
+                                text: format!("{indent}  {line}"),
+                                style: self.theme.style(SemanticColor::Code),
+                            }]);
+                        }
+                        return;
+                    }
                     if is_diagram_language(Some(lang)) {
                         if let Some(diag_lines) = render_diagram_block(
                             lang,
@@ -346,6 +357,7 @@ impl<'a> Renderer<'a> {
 
             Block::Image { alt, url } => {
                 if is_image_asset(url) {
+                    let line_idx = rdoc.lines.len();
                     let img_lines = render_inline_image(
                         self.base_dir,
                         alt,
@@ -355,6 +367,30 @@ impl<'a> Renderer<'a> {
                         self.theme,
                         self.color_mode,
                     );
+                    if let Some(first_line) = img_lines.first() {
+                        let line_w: usize = first_line.iter().map(|s| display_width(&s.text)).sum();
+                        let indent_w = display_width(&indent);
+                        let target = if url.starts_with("http://") || url.starts_with("https://") {
+                            LinkTarget::External(url.clone())
+                        } else {
+                            LinkTarget::File {
+                                path: std::path::PathBuf::from(url),
+                                line_range: None,
+                            }
+                        };
+                        let label = if alt.trim().is_empty() {
+                            url.clone()
+                        } else {
+                            alt.clone()
+                        };
+                        rdoc.links.push(RenderedLink {
+                            line: line_idx,
+                            start_column: indent_w,
+                            end_column: line_w.max(indent_w + 1),
+                            target,
+                            label,
+                        });
+                    }
                     rdoc.lines.extend(img_lines);
                 } else {
                     // pulldown-cmark maps Obsidian `![[Note#Heading]]` to an

@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Component, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use terminalwiki_core::resolve;
 use terminalwiki_core::watch::{ChangeKind, WikiChange};
@@ -11,8 +11,8 @@ use terminalwiki_core::{Config, Error, Result};
 use terminalwiki_graph::{BacklinkInfo, GraphEntry, LayoutEngine, SubGraph, WikiGraph};
 use terminalwiki_index::{FuzzyDataset, FuzzyHit, FuzzyItem};
 use terminalwiki_render::{
-    detect_color_mode, render_markdown, render_path, ColorMode, RenderedDocument, RenderedHeading,
-    RenderedLine, RenderedLink, Theme,
+    detect_color_mode, render_markdown, render_path, ColorMode, LinkTarget, RenderedDocument,
+    RenderedHeading, RenderedLine, RenderedLink, Theme,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,6 +52,14 @@ impl ViewLayout {
     }
 }
 
+/// Link filtering mode for keyboard navigation (Tab / Shift+Tab).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LinkFilter {
+    #[default]
+    All,
+    InternalOnly,
+}
+
 /// Organization mode for the left sidebar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SidebarMode {
@@ -59,6 +67,31 @@ pub enum SidebarMode {
     Flat,
     /// Hierarchical vault folder tree structure.
     Tree,
+    /// Document outline (chapters and headings).
+    Outline,
+    /// Tag explorer.
+    Tags,
+    /// Bookmarked / starred pages.
+    Bookmarks,
+}
+
+/// An entry displayed in the sidebar according to the active `SidebarMode`.
+#[derive(Debug, Clone)]
+pub enum SidebarEntry {
+    Page {
+        wiki: String,
+        relative: PathBuf,
+        title: String,
+    },
+    Heading {
+        title: String,
+        line: usize,
+        level: usize,
+    },
+    Tag {
+        tag: String,
+        count: usize,
+    },
 }
 
 /// Starting content for a page created from inside the TUI.
@@ -132,6 +165,7 @@ pub struct GraphViewState {
     pub selected: usize,
     /// Nodes in the neighbourhood before the cap was applied.
     pub capped: bool,
+    pub is_global: bool,
 }
 
 impl GraphViewState {
@@ -161,6 +195,8 @@ pub struct App<'a> {
     pub history_forward: Vec<(String, PathBuf, usize, usize)>,
 
     pub selected_link_idx: Option<usize>,
+    pub link_filter: LinkFilter,
+    pub bookmarks: std::collections::HashSet<PathBuf>,
 
     pub mode: Mode,
     pub layout_mode: ViewLayout,
@@ -237,6 +273,12 @@ const COMMAND_LIST: &[&str] = &[
     "tag",
     "sidebar",
     "tree",
+    "daily",
+    "allgraph",
+    "bookmark",
+    "bookmarks",
+    "linkfilter",
+    "todos",
     "zen",
     "wikipedia",
     "layout",
@@ -339,6 +381,36 @@ pub const QUICK_COMMANDS: &[QuickCommandHit] = &[
         description: "List all pages linking to the current page",
     },
     QuickCommandHit {
+        id: "daily",
+        title: "Daily Note (Today)",
+        shortcut: "d / Ctrl+D",
+        description: "Create or open today's daily note in Daily/YYYY-MM-DD.md",
+    },
+    QuickCommandHit {
+        id: "allgraph",
+        title: "Global Knowledge Graph (All Notes)",
+        shortcut: "a (in graph)",
+        description: "Show the complete vault graph with all notes and connections",
+    },
+    QuickCommandHit {
+        id: "bookmark",
+        title: "Toggle Bookmark (Star Page)",
+        shortcut: "m",
+        description: "Add or remove the current page from bookmarks list",
+    },
+    QuickCommandHit {
+        id: "linkfilter",
+        title: "Toggle Link Filter (All vs Internal Wiki Links)",
+        shortcut: "L",
+        description: "Filter Tab navigation to internal links only or include external URLs",
+    },
+    QuickCommandHit {
+        id: "todos",
+        title: "Toggle Todo Checkbox on Current Line",
+        shortcut: "x / Space",
+        description: "Toggle task state between - [ ] and - [x] directly on disk",
+    },
+    QuickCommandHit {
         id: "reload",
         title: "Reload Current Page",
         shortcut: ":reload",
@@ -432,6 +504,8 @@ impl<'a> App<'a> {
             history_back: Vec::new(),
             history_forward: Vec::new(),
             selected_link_idx: None,
+            link_filter: LinkFilter::default(),
+            bookmarks: std::collections::HashSet::new(),
             mode: Mode::Normal,
             layout_mode: ViewLayout::Standard,
             sidebar_visible: false,
@@ -532,7 +606,23 @@ impl<'a> App<'a> {
         page_str: &str,
         record_history: bool,
     ) -> Result<()> {
-        let resolution = resolve::resolve(self.wikis, wiki_name, page_str, &self.config.index)?;
+        let (resolution_path, resolution_relative, resolution_wiki) =
+            if let Some(wiki) = self.wikis.get(wiki_name) {
+                let direct = wiki.root.join(page_str);
+                if direct.is_file() {
+                    let rel = direct
+                        .strip_prefix(&wiki.root)
+                        .unwrap_or(Path::new(page_str))
+                        .to_path_buf();
+                    (direct, rel, wiki_name.to_string())
+                } else {
+                    let r = resolve::resolve(self.wikis, wiki_name, page_str, &self.config.index)?;
+                    (r.path, r.relative, r.wiki)
+                }
+            } else {
+                let r = resolve::resolve(self.wikis, wiki_name, page_str, &self.config.index)?;
+                (r.path, r.relative, r.wiki)
+            };
 
         if record_history && !self.current_path.as_os_str().is_empty() {
             self.history_back.push((
@@ -544,21 +634,20 @@ impl<'a> App<'a> {
             self.history_forward.clear();
         }
 
-        let bytes = fs::read(&resolution.path).map_err(|e| Error::io(&resolution.path, e))?;
+        let bytes = fs::read(&resolution_path).map_err(|e| Error::io(&resolution_path, e))?;
         let text = String::from_utf8_lossy(&bytes).into_owned();
 
         let doc: RenderedDocument = render_path(
-            &resolution.path,
+            &resolution_path,
             &bytes,
             self.config,
             &self.theme,
             self.color_mode,
         );
 
-        self.current_wiki = resolution.wiki.clone();
-        self.current_path = resolution.relative.clone();
-        self.current_title = resolution
-            .path
+        self.current_wiki = resolution_wiki;
+        self.current_path = resolution_relative;
+        self.current_title = resolution_path
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| page_str.to_string());
@@ -740,6 +829,16 @@ impl<'a> App<'a> {
                         self.mode = Mode::Backlinks;
                     }
                     "latex" => self.compile_current_latex(arg_tail.as_deref()),
+                    "daily" => {
+                        let _ = self.create_daily_note();
+                    }
+                    "allgraph" => self.open_global_graph(),
+                    "bookmark" => self.toggle_bookmark(),
+                    "bookmarks" => self.set_sidebar_mode(SidebarMode::Bookmarks),
+                    "linkfilter" => self.toggle_link_filter(),
+                    "todos" => {
+                        let _ = self.toggle_todo_on_current_line();
+                    }
                     "reload" => self.reload_current_page(),
                     "quit" => self.should_quit = true,
                     _ => {}
@@ -778,20 +877,371 @@ impl<'a> App<'a> {
         self.status_message = Some(format!("Layout: {}", self.layout_mode.label()));
     }
 
-    /// Switches the sidebar between flat pages list and hierarchical vault folder tree.
+    /// Switches the sidebar mode between Flat, Tree, Outline, Tags, and Bookmarks.
     pub fn toggle_sidebar_mode(&mut self) {
         self.sidebar_mode = match self.sidebar_mode {
             SidebarMode::Flat => SidebarMode::Tree,
-            SidebarMode::Tree => SidebarMode::Flat,
+            SidebarMode::Tree => SidebarMode::Outline,
+            SidebarMode::Outline => SidebarMode::Tags,
+            SidebarMode::Tags => SidebarMode::Bookmarks,
+            SidebarMode::Bookmarks => SidebarMode::Flat,
         };
+        self.sidebar_selected = 0;
         if !self.sidebar_visible {
             self.sidebar_visible = true;
         }
         let label = match self.sidebar_mode {
             SidebarMode::Flat => "Sidebar: Pages List",
             SidebarMode::Tree => "Sidebar: Vault Folder Tree",
+            SidebarMode::Outline => "Sidebar: Document Outline",
+            SidebarMode::Tags => "Sidebar: Tags Explorer",
+            SidebarMode::Bookmarks => "Sidebar: Bookmarks",
         };
         self.status_message = Some(label.to_string());
+    }
+
+    /// Sets the sidebar mode directly.
+    pub fn set_sidebar_mode(&mut self, mode: SidebarMode) {
+        self.sidebar_mode = mode;
+        self.sidebar_selected = 0;
+        self.sidebar_visible = true;
+        let label = match self.sidebar_mode {
+            SidebarMode::Flat => "Sidebar: Pages List",
+            SidebarMode::Tree => "Sidebar: Vault Folder Tree",
+            SidebarMode::Outline => "Sidebar: Document Outline",
+            SidebarMode::Tags => "Sidebar: Tags Explorer",
+            SidebarMode::Bookmarks => "Sidebar: Bookmarks",
+        };
+        self.status_message = Some(label.to_string());
+    }
+
+    /// Returns the entries for the sidebar given the current `sidebar_mode`.
+    pub fn sidebar_entries(&self) -> Vec<SidebarEntry> {
+        match self.sidebar_mode {
+            SidebarMode::Flat => self
+                .fuzzy_dataset
+                .items()
+                .iter()
+                .map(|item| SidebarEntry::Page {
+                    wiki: item.wiki.clone(),
+                    relative: item.relative.clone(),
+                    title: if item.title.is_empty() {
+                        item.relative.to_string_lossy().into_owned()
+                    } else {
+                        item.title.clone()
+                    },
+                })
+                .collect(),
+            SidebarMode::Tree => {
+                let mut items: Vec<_> = self.fuzzy_dataset.items().to_vec();
+                items.sort_by(|a, b| a.relative.cmp(&b.relative));
+                items
+                    .into_iter()
+                    .map(|item| SidebarEntry::Page {
+                        wiki: item.wiki,
+                        relative: item.relative,
+                        title: item.title,
+                    })
+                    .collect()
+            }
+            SidebarMode::Outline => self
+                .headings
+                .iter()
+                .map(|h| SidebarEntry::Heading {
+                    title: h.text.clone(),
+                    line: h.line,
+                    level: h.level,
+                })
+                .collect(),
+            SidebarMode::Tags => {
+                let mut tag_counts: std::collections::BTreeMap<String, usize> =
+                    std::collections::BTreeMap::new();
+                for item in self.fuzzy_dataset.items() {
+                    for tag in &item.tags {
+                        *tag_counts.entry(tag.clone()).or_insert(0) += 1;
+                    }
+                }
+                tag_counts
+                    .into_iter()
+                    .map(|(tag, count)| SidebarEntry::Tag { tag, count })
+                    .collect()
+            }
+            SidebarMode::Bookmarks => self
+                .bookmarks
+                .iter()
+                .map(|p| {
+                    let title = p
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| p.to_string_lossy().into_owned());
+                    SidebarEntry::Page {
+                        wiki: self.current_wiki.clone(),
+                        relative: p.clone(),
+                        title,
+                    }
+                })
+                .collect(),
+        }
+    }
+
+    /// Toggles bookmarking / starring for the currently open page.
+    pub fn toggle_bookmark(&mut self) {
+        if self.current_path.as_os_str().is_empty() {
+            return;
+        }
+        if self.bookmarks.contains(&self.current_path) {
+            self.bookmarks.remove(&self.current_path);
+            self.status_message = Some(format!("Removed bookmark: {}", self.current_title));
+        } else {
+            self.bookmarks.insert(self.current_path.clone());
+            self.status_message = Some(format!("Bookmarked: ★ {}", self.current_title));
+        }
+    }
+
+    /// Toggles the link filter mode (All vs Internal Wiki links).
+    pub fn toggle_link_filter(&mut self) {
+        self.link_filter = match self.link_filter {
+            LinkFilter::All => LinkFilter::InternalOnly,
+            LinkFilter::InternalOnly => LinkFilter::All,
+        };
+        let label = match self.link_filter {
+            LinkFilter::All => "Link filter: All links (Internal + External)",
+            LinkFilter::InternalOnly => "Link filter: Internal only (Wiki notes)",
+        };
+        self.status_message = Some(label.to_string());
+    }
+
+    /// Cycles through links on the page respecting `link_filter`.
+    pub fn cycle_links(&mut self, forward: bool, view_h: usize) {
+        if self.links.is_empty() {
+            self.status_message = Some("No links on this page".to_string());
+            return;
+        }
+
+        let eligible: Vec<usize> = self
+            .links
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| match self.link_filter {
+                LinkFilter::All => true,
+                LinkFilter::InternalOnly => !matches!(l.target, LinkTarget::External(_)),
+            })
+            .map(|(i, _)| i)
+            .collect();
+
+        if eligible.is_empty() {
+            self.status_message = Some(match self.link_filter {
+                LinkFilter::InternalOnly => {
+                    "No internal wiki links on this page (press 'L' to include external links)"
+                        .to_string()
+                }
+                LinkFilter::All => "No links on this page".to_string(),
+            });
+            return;
+        }
+
+        let next_idx = match self.selected_link_idx {
+            None => eligible[0],
+            Some(cur) => {
+                if let Some(pos) = eligible.iter().position(|&i| i == cur) {
+                    if forward {
+                        eligible[(pos + 1) % eligible.len()]
+                    } else if pos == 0 {
+                        *eligible.last().unwrap()
+                    } else {
+                        eligible[pos - 1]
+                    }
+                } else if forward {
+                    eligible
+                        .iter()
+                        .copied()
+                        .find(|&i| i > cur)
+                        .unwrap_or(eligible[0])
+                } else {
+                    eligible
+                        .iter()
+                        .copied()
+                        .rfind(|&i| i < cur)
+                        .unwrap_or(*eligible.last().unwrap())
+                }
+            }
+        };
+
+        self.selected_link_idx = Some(next_idx);
+        let link = &self.links[next_idx];
+        self.scroll = link.line.saturating_sub(view_h / 2);
+        let filter_tag = match self.link_filter {
+            LinkFilter::All => "",
+            LinkFilter::InternalOnly => " [internal only]",
+        };
+        self.status_message = Some(format!(
+            "Link [{}/{}]{filter_tag}: {} (Enter to follow, L toggle filter)",
+            next_idx + 1,
+            self.links.len(),
+            link.label
+        ));
+    }
+
+    /// Returns today's civil date string formatted as `YYYY-MM-DD`.
+    pub fn current_date_string() -> String {
+        let secs = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+            Ok(d) => d.as_secs(),
+            Err(_) => 0,
+        };
+        let mut days = (secs / 86400) as i64;
+        days += 719468;
+        let era = if days >= 0 { days } else { days - 146096 } / 146097;
+        let doe = (days - era * 146097) as u64;
+        let yoe = (doe - doe / 1024 + doe / 1461 - doe / 142401) / 365;
+        let y = (yoe as i64) + era * 400;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let d = doy - (153 * mp + 2) / 5 + 1;
+        let m = if mp < 10 { mp + 3 } else { mp - 9 };
+        let y = if m <= 2 { y + 1 } else { y };
+        format!("{y:04}-{m:02}-{d:02}")
+    }
+
+    /// Creates or opens today's daily note in `Daily/YYYY-MM-DD.md`.
+    pub fn create_daily_note(&mut self) -> Result<PathBuf> {
+        let date_str = Self::current_date_string();
+        let rel_path = PathBuf::from("Daily").join(format!("{date_str}.md"));
+        let Some(wiki) = self.wikis.get(&self.current_wiki) else {
+            return Err(Error::other(format!(
+                "Wiki not found: {}",
+                self.current_wiki
+            )));
+        };
+        let target_path = wiki.root.join(&rel_path);
+        let exists = target_path.exists();
+        if !exists {
+            if let Some(parent) = target_path.parent() {
+                fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
+            }
+            let initial_content = format!(
+                "# {}\n\n#daily #todo\n\n## Tasks\n- [ ] \n\n## Notes\n- \n",
+                date_str
+            );
+            fs::write(&target_path, initial_content).map_err(|e| Error::io(&target_path, e))?;
+            let _ = terminalwiki_index::WikiIndex::open(wiki, self.config);
+            self.rebuild_fuzzy_dataset();
+            self.invalidate_graph();
+        }
+
+        let rel_str = rel_path.to_string_lossy().into_owned();
+        self.load_page(&self.current_wiki.clone(), &rel_str, true)?;
+        self.mode = Mode::Normal;
+        self.status_message = Some(if exists {
+            format!("Opened daily note for {date_str}")
+        } else {
+            format!("Created daily note for {date_str}")
+        });
+        Ok(target_path)
+    }
+
+    /// Toggles a markdown todo checkbox `- [ ]` <-> `- [x]` on the current/nearest line.
+    pub fn toggle_todo_on_current_line(&mut self) -> Result<bool> {
+        if self.current_path.as_os_str().is_empty() {
+            return Ok(false);
+        }
+        let Some(wiki) = self.wikis.get(&self.current_wiki) else {
+            return Err(Error::other(format!(
+                "Wiki not found: {}",
+                self.current_wiki
+            )));
+        };
+        let file_path = wiki.root.join(&self.current_path);
+        if !file_path.is_file() {
+            return Ok(false);
+        }
+
+        let content = fs::read_to_string(&file_path).map_err(|e| Error::io(&file_path, e))?;
+        let mut raw_lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+        if raw_lines.is_empty() {
+            return Ok(false);
+        }
+
+        // Choose the line closest to scroll position
+        let target_idx = self.scroll.min(raw_lines.len().saturating_sub(1));
+        let mut best_line_idx = None;
+        for delta in 0..=5 {
+            let idx1 = target_idx + delta;
+            if idx1 < raw_lines.len() {
+                let l = &raw_lines[idx1];
+                if l.contains("- [ ]")
+                    || l.contains("- [x]")
+                    || l.contains("- [X]")
+                    || l.contains("* [ ]")
+                    || l.contains("* [x]")
+                    || l.contains("* [X]")
+                    || l.trim_start().starts_with("- ")
+                    || l.trim_start().starts_with("* ")
+                {
+                    best_line_idx = Some(idx1);
+                    break;
+                }
+            }
+            if delta > 0 && target_idx >= delta {
+                let idx2 = target_idx - delta;
+                let l = &raw_lines[idx2];
+                if l.contains("- [ ]")
+                    || l.contains("- [x]")
+                    || l.contains("- [X]")
+                    || l.contains("* [ ]")
+                    || l.contains("* [x]")
+                    || l.contains("* [X]")
+                    || l.trim_start().starts_with("- ")
+                    || l.trim_start().starts_with("* ")
+                {
+                    best_line_idx = Some(idx2);
+                    break;
+                }
+            }
+        }
+
+        let line_idx = best_line_idx.unwrap_or(target_idx);
+        let orig_line = &raw_lines[line_idx];
+        let toggled = if orig_line.contains("- [ ]") {
+            orig_line.replacen("- [ ]", "- [x]", 1)
+        } else if orig_line.contains("- [x]") {
+            orig_line.replacen("- [x]", "- [ ]", 1)
+        } else if orig_line.contains("- [X]") {
+            orig_line.replacen("- [X]", "- [ ]", 1)
+        } else if orig_line.contains("* [ ]") {
+            orig_line.replacen("* [ ]", "* [x]", 1)
+        } else if orig_line.contains("* [x]") {
+            orig_line.replacen("* [x]", "* [ ]", 1)
+        } else if orig_line.contains("* [X]") {
+            orig_line.replacen("* [X]", "* [ ]", 1)
+        } else if let Some(stripped) = orig_line.strip_prefix("- ") {
+            format!("- [x] {stripped}")
+        } else if let Some(stripped) = orig_line.strip_prefix("* ") {
+            format!("* [x] {stripped}")
+        } else {
+            format!("- [ ] {orig_line}")
+        };
+
+        let is_completed = toggled.contains("- [x]") || toggled.contains("* [x]");
+        raw_lines[line_idx] = toggled;
+        let mut new_content = raw_lines.join("\n");
+        if content.ends_with('\n') {
+            new_content.push('\n');
+        }
+
+        fs::write(&file_path, new_content).map_err(|e| Error::io(&file_path, e))?;
+
+        let cur_scroll = self.scroll;
+        let rel_str = self.current_path.to_string_lossy().into_owned();
+        let _ = self.load_page(&self.current_wiki.clone(), &rel_str, false);
+        self.scroll = cur_scroll;
+
+        self.status_message = Some(if is_completed {
+            "✓ Todo marked as completed [x]".to_string()
+        } else {
+            "○ Todo marked as incomplete [ ]".to_string()
+        });
+
+        Ok(true)
     }
 
     /// Recomputes live in-page search matches (`Ctrl+F` / `/`) and jumps to the first match.
@@ -1093,19 +1543,32 @@ impl<'a> App<'a> {
 
     /// Opens the sidebar entry selected with `j`/`k`.
     pub fn open_sidebar_selected(&mut self) -> Result<()> {
-        let Some(item) = self.fuzzy_dataset.items().get(self.sidebar_selected) else {
+        let entries = self.sidebar_entries();
+        let Some(entry) = entries.get(self.sidebar_selected) else {
             return Ok(());
         };
-        let wiki = item.wiki.clone();
-        let relative = item.relative.to_string_lossy().into_owned();
-        self.load_page(&wiki, &relative, true)?;
-        self.mode = Mode::Normal;
+        match entry {
+            SidebarEntry::Page { wiki, relative, .. } => {
+                let rel_str = relative.to_string_lossy().into_owned();
+                self.load_page(wiki, &rel_str, true)?;
+                self.mode = Mode::Normal;
+            }
+            SidebarEntry::Heading { line, .. } => {
+                self.scroll = line.saturating_sub(1);
+                self.mode = Mode::Normal;
+            }
+            SidebarEntry::Tag { tag, .. } => {
+                self.mode = Mode::Finder;
+                self.finder_query = format!("#{tag}");
+                self.update_finder_filter();
+            }
+        }
         Ok(())
     }
 
     /// Moves the sidebar selection by `delta`, clamped to the list.
     pub fn sidebar_select(&mut self, delta: isize) {
-        let len = self.fuzzy_dataset.items().len();
+        let len = self.sidebar_entries().len();
         if len == 0 {
             return;
         }
@@ -1326,6 +1789,16 @@ impl<'a> App<'a> {
             }
             "sidebar" => self.toggle_sidebar(),
             "tree" => self.toggle_sidebar_mode(),
+            "daily" => {
+                let _ = self.create_daily_note();
+            }
+            "allgraph" => self.open_global_graph(),
+            "bookmark" => self.toggle_bookmark(),
+            "bookmarks" => self.set_sidebar_mode(SidebarMode::Bookmarks),
+            "linkfilter" => self.toggle_link_filter(),
+            "todos" => {
+                let _ = self.toggle_todo_on_current_line();
+            }
             "zen" => self.toggle_zen_mode(),
             "wikipedia" | "layout" => self.toggle_wikipedia_layout(),
             "latex" | "compile" => {
@@ -1362,7 +1835,15 @@ impl<'a> App<'a> {
         }
         let mut entries = Vec::new();
         for wiki in self.wikis.iter() {
-            if let Ok(idx) = terminalwiki_index::WikiIndex::load(&wiki.name) {
+            let idx_opt = terminalwiki_index::WikiIndex::load(&wiki.name)
+                .ok()
+                .filter(|i| !i.entries.is_empty())
+                .or_else(|| {
+                    terminalwiki_index::WikiIndex::open(wiki, self.config)
+                        .ok()
+                        .map(|(idx, _)| idx)
+                });
+            if let Some(idx) = idx_opt {
                 for e in idx.entries {
                     entries.push(GraphEntry {
                         wiki: e.wiki,
@@ -1615,9 +2096,75 @@ impl<'a> App<'a> {
             ordered_nodes,
             selected,
             capped,
+            is_global: false,
         });
         self.mode = Mode::Graph;
         self.status_message = None;
+    }
+
+    /// Opens the complete vault graph showing all notes and interconnecting edges.
+    pub fn open_global_graph(&mut self) {
+        self.ensure_graph();
+        let Some(graph) = self.graph_cache.as_ref() else {
+            self.status_message = Some("Graph unavailable".to_string());
+            return;
+        };
+
+        let center_opt = graph.find_node_index(&self.current_wiki, &self.current_path);
+        let sub = graph.full_graph(GRAPH_MAX_NODES, center_opt);
+        if sub.nodes.is_empty() {
+            self.status_message = Some("No nodes in vault graph".to_string());
+            return;
+        }
+
+        let pos = LayoutEngine::compute_layout(graph, &sub);
+        let mut ordered_nodes = sub.nodes.clone();
+        ordered_nodes.sort_by(|a, b| {
+            let pa = pos.get(a).copied().unwrap_or((0.0, 0.0));
+            let pb = pos.get(b).copied().unwrap_or((0.0, 0.0));
+            pa.1.total_cmp(&pb.1)
+                .then(pa.0.total_cmp(&pb.0))
+                .then(a.cmp(b))
+        });
+        let selected = ordered_nodes
+            .iter()
+            .position(|&n| n == sub.center)
+            .unwrap_or(0);
+
+        let capped = graph.nodes().len() > GRAPH_MAX_NODES;
+
+        self.graph_view = Some(GraphViewState {
+            root_wiki: self.current_wiki.clone(),
+            root_path: self.current_path.clone(),
+            depth: 1,
+            sub,
+            pos,
+            ordered_nodes,
+            selected,
+            capped,
+            is_global: true,
+        });
+        self.mode = Mode::Graph;
+        self.status_message = Some("Global Vault Graph".to_string());
+    }
+
+    /// Toggles between local neighborhood graph and global vault graph.
+    pub fn toggle_graph_scope(&mut self) {
+        let is_global = self
+            .graph_view
+            .as_ref()
+            .map(|v| v.is_global)
+            .unwrap_or(false);
+        if is_global {
+            let depth = self
+                .graph_view
+                .as_ref()
+                .map(|v| v.depth)
+                .unwrap_or(GRAPH_DEFAULT_DEPTH);
+            self.open_graph_at_depth(depth);
+        } else {
+            self.open_global_graph();
+        }
     }
 
     /// Moves the graph selection by `delta`, saturating at both ends.

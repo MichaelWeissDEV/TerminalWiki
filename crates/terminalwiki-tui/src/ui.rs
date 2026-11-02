@@ -11,7 +11,7 @@ use crossterm::terminal::{size as terminal_size, Clear, ClearType};
 use terminalwiki_core::sanitize::sanitize_line;
 use terminalwiki_core::unicode::{display_width, pad_display_width, truncate_display_width};
 
-use crate::app::{App, Mode, SidebarMode, ViewLayout};
+use crate::app::{App, Mode, SidebarEntry, SidebarMode, ViewLayout};
 
 pub fn draw(app: &App) -> std::io::Result<()> {
     let (cols, rows) = terminal_size()?;
@@ -27,10 +27,15 @@ pub fn draw(app: &App) -> std::io::Result<()> {
 
     // ─── 1. Minimal Header (Phase 46) ─────────────────────────────────────────────
     let path_str = app.current_path.to_string_lossy();
-    let title_display = if path_str.is_empty() {
-        format!("{} · Home", app.current_wiki)
+    let star = if app.bookmarks.contains(&app.current_path) {
+        "★ "
     } else {
-        format!("{} / {}", app.current_wiki, path_str)
+        ""
+    };
+    let title_display = if path_str.is_empty() {
+        format!("{star}{} · Home", app.current_wiki)
+    } else {
+        format!("{star}{} / {}", app.current_wiki, path_str)
     };
 
     let percent_str = if !app.lines.is_empty() {
@@ -356,10 +361,13 @@ fn draw_sidebar(
     height: usize,
     out: &mut std::io::Stdout,
 ) -> std::io::Result<()> {
-    let items = app.fuzzy_dataset.items();
+    let entries = app.sidebar_entries();
     let header_label = match app.sidebar_mode {
-        SidebarMode::Flat => format!("  Pages ({})", items.len()),
-        SidebarMode::Tree => format!("  Vault Tree ({})", items.len()),
+        SidebarMode::Flat => format!("  Pages ({})", entries.len()),
+        SidebarMode::Tree => format!("  Vault Tree ({})", entries.len()),
+        SidebarMode::Outline => format!("  Outline ({})", entries.len()),
+        SidebarMode::Tags => format!("  Tags ({})", entries.len()),
+        SidebarMode::Bookmarks => format!("  Bookmarks ({})", entries.len()),
     };
     execute!(
         out,
@@ -381,39 +389,49 @@ fn draw_sidebar(
     let list_top = 4usize;
     let list_height = height.saturating_sub(list_top + 2);
     let mut start = app.sidebar_selected.saturating_sub(list_height / 2);
-    if start + list_height > items.len() {
-        start = items.len().saturating_sub(list_height);
+    if start + list_height > entries.len() {
+        start = entries.len().saturating_sub(list_height);
     }
 
-    for (offset, item) in items.iter().skip(start).take(list_height).enumerate() {
+    for (offset, entry) in entries.iter().skip(start).take(list_height).enumerate() {
         let index = start + offset;
         let selected = app.mode == Mode::Sidebar && index == app.sidebar_selected;
-        let current = item.wiki == app.current_wiki && item.relative == app.current_path;
-        let marker = if current { "▸ " } else { "  " };
-        let display_entry = match app.sidebar_mode {
-            SidebarMode::Flat => {
-                let title = if item.title.is_empty() {
-                    item.relative.to_string_lossy().into_owned()
-                } else {
-                    item.title.clone()
-                };
-                format!("{marker}{title}")
-            }
-            SidebarMode::Tree => {
-                let parent = item
-                    .relative
-                    .parent()
-                    .and_then(|p| (!p.as_os_str().is_empty()).then(|| p.to_string_lossy()));
-                let stem = item
-                    .relative
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| item.title.clone());
-                if let Some(dir) = parent {
-                    format!("{marker}📁 {dir}/{stem}")
-                } else {
-                    format!("{marker}📄 {stem}")
+        let mut is_current = false;
+        let display_entry = match entry {
+            SidebarEntry::Page {
+                wiki,
+                relative,
+                title,
+            } => {
+                let current = wiki == &app.current_wiki && relative == &app.current_path;
+                is_current = current;
+                let marker = if current { "▸ " } else { "  " };
+                match app.sidebar_mode {
+                    SidebarMode::Flat => format!("{marker}{title}"),
+                    SidebarMode::Tree => {
+                        let parent = relative
+                            .parent()
+                            .and_then(|p| (!p.as_os_str().is_empty()).then(|| p.to_string_lossy()));
+                        let stem = relative
+                            .file_stem()
+                            .map(|s| s.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| title.clone());
+                        if let Some(dir) = parent {
+                            format!("{marker}📁 {dir}/{stem}")
+                        } else {
+                            format!("{marker}📄 {stem}")
+                        }
+                    }
+                    SidebarMode::Bookmarks => format!("{marker}★ {title}"),
+                    _ => format!("{marker}{title}"),
                 }
+            }
+            SidebarEntry::Heading { title, level, .. } => {
+                let indent = "  ".repeat(level.saturating_sub(1));
+                format!("{indent}§ {title}")
+            }
+            SidebarEntry::Tag { tag, count } => {
+                format!("  🏷 #{tag} ({count})")
             }
         };
         let line = truncate_display_width(&display_entry, width.saturating_sub(2));
@@ -429,7 +447,7 @@ fn draw_sidebar(
                 SetAttribute(Attribute::Reset),
                 ResetColor
             )?;
-        } else if current {
+        } else if is_current {
             execute!(
                 out,
                 SetForegroundColor(CColor::White),
@@ -1066,10 +1084,15 @@ fn draw_graph_view(
         return Ok(());
     };
 
+    let scope_label = if view.is_global {
+        "Global Vault Graph".to_string()
+    } else {
+        format!("depth {}", view.depth)
+    };
     let header = format!(
-        "  Graph · {} · depth {}",
+        "  Graph · {} · {} · [+/-] depth · [a] all/local · [Enter] open · [Esc] close",
         sanitize_line(&app.current_title),
-        view.depth
+        scope_label
     );
     execute!(
         out,
@@ -1108,7 +1131,36 @@ fn draw_graph_view(
         )?;
     }
 
-    // Highlight the selected node: accent + bold, no box (old Gate 7.6).
+    // Color-coded nodes and distinct markers by node document kind
+    for p in &rendered.labels {
+        let (color, glyph) = match p.kind {
+            terminalwiki_graph::NodeKind::Page => (CColor::Green, "●"),
+            terminalwiki_graph::NodeKind::Latex => (CColor::Magenta, "◆"),
+            terminalwiki_graph::NodeKind::Bibtex => (CColor::Yellow, "▲"),
+            terminalwiki_graph::NodeKind::Pdf => (CColor::Red, "■"),
+            terminalwiki_graph::NodeKind::CodeFile => (CColor::Blue, "λ"),
+            terminalwiki_graph::NodeKind::Asset => (CColor::Cyan, "◈"),
+            terminalwiki_graph::NodeKind::Wiki => (CColor::White, "★"),
+        };
+        execute!(
+            out,
+            MoveTo(p.marker_col as u16, (CANVAS_TOP + p.row) as u16),
+            SetForegroundColor(color),
+            Print(glyph),
+            ResetColor
+        )?;
+        if p.width > 0 {
+            execute!(
+                out,
+                MoveTo(p.col as u16, (CANVAS_TOP + p.row) as u16),
+                SetForegroundColor(CColor::White),
+                Print(sanitize_line(&p.text)),
+                ResetColor
+            )?;
+        }
+    }
+
+    // Highlight the selected node: accent + bold + reverse
     if let Some(selected_node) = view.selected_node() {
         if let Some(p) = rendered.labels.iter().find(|p| p.node == selected_node) {
             execute!(
@@ -1135,22 +1187,34 @@ fn draw_graph_view(
         }
     }
 
-    // Summary line: what is shown, and the selected node's identity.
-    let selected_title = view
+    // Summary line: what is shown, node kind, path, and legend.
+    let selected_info = view
         .selected_node()
         .and_then(|n| graph.node(n))
-        .map(|n| n.title.clone())
+        .map(|n| {
+            let kind_label = match n.kind {
+                terminalwiki_graph::NodeKind::Page => "Page",
+                terminalwiki_graph::NodeKind::Latex => "LaTeX",
+                terminalwiki_graph::NodeKind::Bibtex => "BibTeX",
+                terminalwiki_graph::NodeKind::Pdf => "PDF",
+                terminalwiki_graph::NodeKind::CodeFile => "Code",
+                terminalwiki_graph::NodeKind::Asset => "Asset",
+                terminalwiki_graph::NodeKind::Wiki => "Wiki",
+            };
+            format!("[{kind_label}] {} ({})", n.title, n.id.relative.display())
+        })
         .unwrap_or_default();
+
     let capped_note = if view.capped {
         format!(" (capped at {})", view.sub.nodes.len())
     } else {
         String::new()
     };
     let summary = format!(
-        "  {} nodes{}   ▸ {}",
+        "  {} nodes{}   ▸ {}   |   ● Note  ◆ LaTeX  ▲ BibTeX  ■ PDF  λ Code",
         view.sub.nodes.len(),
         capped_note,
-        sanitize_line(&selected_title)
+        sanitize_line(&selected_info)
     );
     execute!(
         out,

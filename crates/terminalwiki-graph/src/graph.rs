@@ -6,6 +6,9 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NodeKind {
     Page,
+    Latex,
+    Bibtex,
+    Pdf,
     CodeFile,
     Asset,
     Wiki,
@@ -18,6 +21,7 @@ pub enum EdgeKind {
     Embeds,
     References,
     Mounts,
+    SharedTag(String),
 }
 
 /// Identifier for a page
@@ -121,6 +125,12 @@ impl WikiGraph {
         self.nodes.get(idx)
     }
 
+    /// Looks up the node index for a given wiki and relative path.
+    pub fn find_node_index(&self, wiki: &str, relative: &Path) -> Option<usize> {
+        let key = Self::make_key(wiki, relative);
+        self.id_to_index.get(&key).copied()
+    }
+
     /// Build the graph from a set of entries.
     pub fn from_entries(entries: &[GraphEntry]) -> Self {
         let mut nodes = Vec::new();
@@ -129,10 +139,34 @@ impl WikiGraph {
         // Pass 1: create all nodes
         for entry in entries {
             let key = Self::make_key(&entry.wiki, &entry.relative);
+            let ext = entry
+                .relative
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+
             let kind = match entry.content_type.as_str() {
                 "markdown" => NodeKind::Page,
+                "latex" => {
+                    if ext == "bib" {
+                        NodeKind::Bibtex
+                    } else {
+                        NodeKind::Latex
+                    }
+                }
                 "code" => NodeKind::CodeFile,
-                _ => NodeKind::Asset, // image, etc.
+                _ => {
+                    if ext == "pdf" {
+                        NodeKind::Pdf
+                    } else if ext == "bib" {
+                        NodeKind::Bibtex
+                    } else if ext == "tex" || ext == "latex" {
+                        NodeKind::Latex
+                    } else {
+                        NodeKind::Asset
+                    }
+                }
             };
 
             let node_idx = nodes.len();
@@ -153,28 +187,37 @@ impl WikiGraph {
         let mut outgoing = vec![Vec::new(); num_nodes];
         let mut incoming = vec![Vec::new(); num_nodes];
 
-        // Pass 2: create edges
+        // Pass 2: create edges from links
         for (from_idx, entry) in entries.iter().enumerate() {
-            // Process wiki links
+            // Process wiki links and document references
             for link in &entry.wiki_links {
-                // simple target resolution: check if link exactly matches the file name (without ext) or relative path
-                // For simplicity here, we assume link is relative path without extension or exact
-                // In a real wiki we'd check all wikis if wiki name not specified
-                // Let's just find a matching node
-                let target_path = PathBuf::from(format!("{}.md", link));
-                let exact_key = Self::make_key(&entry.wiki, &target_path);
-
-                // For this mock implementation we'll look it up by checking title or path matches
-                let mut target_idx = id_to_index.get(&exact_key).copied();
+                let candidates = [
+                    PathBuf::from(link),
+                    PathBuf::from(format!("{link}.md")),
+                    PathBuf::from(format!("{link}.tex")),
+                    PathBuf::from(format!("{link}.pdf")),
+                    PathBuf::from(format!("{link}.bib")),
+                ];
+                let mut target_idx = None;
+                for cand in &candidates {
+                    let key = Self::make_key(&entry.wiki, cand);
+                    if let Some(&idx) = id_to_index.get(&key) {
+                        target_idx = Some(idx);
+                        break;
+                    }
+                }
                 if target_idx.is_none() {
-                    // Try to find any node matching the link as stem or title
+                    let link_lower = link.to_ascii_lowercase();
                     target_idx = nodes.iter().position(|n| {
                         let n_stem =
                             n.id.relative
                                 .file_stem()
                                 .and_then(|s| s.to_str())
-                                .unwrap_or("");
-                        n_stem == link || n.title == *link
+                                .unwrap_or("")
+                                .to_ascii_lowercase();
+                        let n_rel = n.id.relative.to_string_lossy().to_ascii_lowercase();
+                        let n_title = n.title.to_ascii_lowercase();
+                        n_stem == link_lower || n_rel == link_lower || n_title == link_lower
                     });
                 }
 
@@ -193,9 +236,8 @@ impl WikiGraph {
                 }
             }
 
-            // Process image links
+            // Process image and asset embeds
             for link in &entry.image_links {
-                // find asset
                 let target_idx = nodes
                     .iter()
                     .position(|n| n.id.relative.to_string_lossy().contains(link));
@@ -212,6 +254,36 @@ impl WikiGraph {
                 outgoing[from_idx].push(edge_idx);
                 if let Some(to) = target_idx {
                     incoming[to].push(edge_idx);
+                }
+            }
+        }
+
+        // Pass 3: group nodes by shared tags (semantic tag clustering)
+        let mut tag_to_nodes: HashMap<String, Vec<usize>> = HashMap::new();
+        for (idx, node) in nodes.iter().enumerate() {
+            for tag in &node.tags {
+                tag_to_nodes
+                    .entry(tag.to_ascii_lowercase())
+                    .or_default()
+                    .push(idx);
+            }
+        }
+        for (tag, tagged_indices) in tag_to_nodes {
+            if tagged_indices.len() > 1 && tagged_indices.len() <= 25 {
+                for window in tagged_indices.windows(2) {
+                    let (u, v) = (window[0], window[1]);
+                    if u != v && !outgoing[u].iter().any(|&e| edges[e].to == Some(v)) {
+                        let edge_idx = edges.len();
+                        edges.push(Edge {
+                            from: u,
+                            to: Some(v),
+                            kind: EdgeKind::SharedTag(tag.clone()),
+                            broken: false,
+                            target: tag.clone(),
+                        });
+                        outgoing[u].push(edge_idx);
+                        incoming[v].push(edge_idx);
+                    }
                 }
             }
         }
@@ -351,11 +423,23 @@ impl WikiGraph {
             }
         }
 
+        // Also collect ALL interconnecting edges between all visited nodes
+        for &u in &visited_nodes {
+            for &edge_idx in &self.outgoing[u] {
+                let edge = &self.edges[edge_idx];
+                if let Some(to) = edge.to {
+                    if visited_nodes.contains(&to) {
+                        visited_edges.insert(edge_idx);
+                    }
+                }
+            }
+        }
+
         // Drop edges whose endpoints did not survive the cap.
         visited_edges.retain(|&e_idx| {
             let edge = &self.edges[e_idx];
             visited_nodes.contains(&edge.from)
-                && edge.to.is_none_or(|to| visited_nodes.contains(&to))
+                && edge.to.is_some_and(|to| visited_nodes.contains(&to))
         });
 
         let mut nodes: Vec<_> = visited_nodes.into_iter().collect();
@@ -363,6 +447,28 @@ impl WikiGraph {
         nodes.sort_unstable();
         edges.sort_unstable();
 
+        SubGraph {
+            nodes,
+            edges,
+            center,
+        }
+    }
+
+    /// Global graph containing all nodes in the wiki (or up to `max_nodes`)
+    /// and all interconnecting links between them.
+    pub fn full_graph(&self, max_nodes: usize, center_opt: Option<usize>) -> SubGraph {
+        let center = center_opt.unwrap_or(0);
+        let n = self.nodes.len().min(max_nodes);
+        let nodes: Vec<usize> = (0..n).collect();
+        let node_set: HashSet<usize> = nodes.iter().copied().collect();
+        let mut edges = Vec::new();
+        for (i, edge) in self.edges.iter().enumerate() {
+            if let Some(to) = edge.to {
+                if node_set.contains(&edge.from) && node_set.contains(&to) {
+                    edges.push(i);
+                }
+            }
+        }
         SubGraph {
             nodes,
             edges,

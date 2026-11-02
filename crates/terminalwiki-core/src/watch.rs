@@ -260,10 +260,16 @@ impl WikiWatcher {
     }
 
     fn record_rename(&mut self, from: PathBuf, to: PathBuf, now: Instant) {
+        self.pending.remove(&from);
         // An atomic save (`.foo.md.tmp` → `foo.md`) is a rename whose source is
         // an ignored temp file. Report it as a plain modification of the target
         // rather than a rename from a path the consumer never knew about.
-        let from_tracked = self.match_root(&from).is_some();
+        let from_is_temp = from
+            .file_name()
+            .and_then(|s| s.to_str())
+            .map(|s| s.starts_with('.') || s.ends_with('~') || s.ends_with(".tmp"))
+            .unwrap_or(false);
+        let from_tracked = self.match_root(&from).is_some() && !from_is_temp;
         if from_tracked {
             self.record(to, ChangeKind::Rename { from }, now);
         } else {

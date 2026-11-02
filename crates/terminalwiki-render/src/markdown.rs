@@ -656,7 +656,98 @@ fn normalize_math_delimiters(text: &str) -> String {
     if in_highlight {
         output.push(HIGHLIGHT_END);
     }
-    output
+    wrap_standalone_latex_math_envs(&output)
+}
+
+/// Wraps standalone `\begin{equation}...\end{equation}` / `align` / `gather` / `multline`
+/// blocks in `$$...$$` when they appear at line start outside fenced code or `$$` blocks,
+/// so native LaTeX equations in `.md` files render directly as 2D Unicode math.
+fn wrap_standalone_latex_math_envs(text: &str) -> String {
+    const MATH_ENVS: &[&str] = &[
+        "equation",
+        "equation*",
+        "align",
+        "align*",
+        "gather",
+        "gather*",
+        "multline",
+        "multline*",
+        "displaymath",
+    ];
+
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out = String::with_capacity(text.len() + 32);
+    let mut in_fence = false;
+    let mut in_dollar_math = false;
+    let mut i = 0;
+
+    while i < lines.len() {
+        let line = lines[i];
+        let trimmed = line.trim();
+
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            in_fence = !in_fence;
+        }
+        if !in_fence && trimmed.starts_with("$$") {
+            let count = line.matches("$$").count();
+            if count % 2 == 1 {
+                in_dollar_math = !in_dollar_math;
+            }
+        }
+
+        if !in_fence && !in_dollar_math {
+            if let Some(env) = MATH_ENVS
+                .iter()
+                .copied()
+                .find(|e| trimmed.starts_with(&format!("\\begin{{{e}}}")))
+            {
+                let end_marker = format!("\\end{{{env}}}");
+                out.push_str("$$\n");
+                let is_align = env.starts_with("align");
+                if is_align {
+                    out.push_str("\\begin{aligned}\n");
+                }
+                if let Some(after_begin) = trimmed.strip_prefix(&format!("\\begin{{{env}}}")) {
+                    if !after_begin.trim().is_empty() {
+                        out.push_str(after_begin.trim());
+                        out.push('\n');
+                    }
+                }
+                i += 1;
+                while i < lines.len() {
+                    let l = lines[i].trim();
+                    if let Some(before_end) = l.strip_suffix(&end_marker) {
+                        if !before_end.trim().is_empty() {
+                            out.push_str(before_end.trim());
+                            out.push('\n');
+                        }
+                        i += 1;
+                        break;
+                    }
+                    if l.starts_with(&end_marker) {
+                        i += 1;
+                        break;
+                    }
+                    out.push_str(lines[i]);
+                    out.push('\n');
+                    i += 1;
+                }
+                if is_align {
+                    out.push_str("\\end{aligned}\n");
+                }
+                out.push_str("$$\n");
+                continue;
+            }
+        }
+
+        out.push_str(line);
+        if i + 1 < lines.len() || text.ends_with('\n') {
+            out.push('\n');
+        }
+        i += 1;
+    }
+
+    out
 }
 
 /// True when the `=` run beginning at `start` is the entire line, i.e. a

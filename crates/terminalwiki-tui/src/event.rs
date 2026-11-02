@@ -8,7 +8,7 @@ use crossterm::event::{
 use terminalwiki_core::Result;
 use terminalwiki_render::LinkTarget;
 
-use crate::app::{App, Mode, PageTemplate};
+use crate::app::{App, Mode, PageTemplate, SidebarMode};
 
 /// Dispatches one terminal event delivered by the event runtime.
 pub fn handle_terminal_event(app: &mut App, event: Event) -> Result<()> {
@@ -196,41 +196,25 @@ fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<()> {
         (KeyModifiers::CONTROL, KeyCode::Char('i')) => {
             app.go_forward();
         }
+        (KeyModifiers::NONE, KeyCode::Char('d')) => {
+            let _ = app.create_daily_note();
+        }
+        (KeyModifiers::NONE, KeyCode::Char('m')) => {
+            app.toggle_bookmark();
+        }
+        (KeyModifiers::SHIFT, KeyCode::Char('L')) | (KeyModifiers::NONE, KeyCode::Char('L')) => {
+            app.toggle_link_filter();
+        }
+        (KeyModifiers::NONE, KeyCode::Char('x')) | (KeyModifiers::NONE, KeyCode::Char(' ')) => {
+            let _ = app.toggle_todo_on_current_line();
+        }
         (KeyModifiers::NONE, KeyCode::Tab) | (KeyModifiers::NONE, KeyCode::Char(']')) => {
-            if !app.links.is_empty() {
-                let next = app
-                    .selected_link_idx
-                    .map(|i| (i + 1) % app.links.len())
-                    .unwrap_or(0);
-                app.selected_link_idx = Some(next);
-                let link = &app.links[next];
-                app.scroll = link.line.saturating_sub(view_h / 2);
-                app.status_message = Some(format!(
-                    "Link [{}/{}]: {} (Enter to follow)",
-                    next + 1,
-                    app.links.len(),
-                    link.label
-                ));
-            }
+            app.cycle_links(true, view_h);
         }
         (KeyModifiers::SHIFT, KeyCode::BackTab)
         | (KeyModifiers::NONE, KeyCode::BackTab)
         | (KeyModifiers::NONE, KeyCode::Char('[')) => {
-            if !app.links.is_empty() {
-                let prev = app
-                    .selected_link_idx
-                    .map(|i| if i == 0 { app.links.len() - 1 } else { i - 1 })
-                    .unwrap_or(0);
-                app.selected_link_idx = Some(prev);
-                let link = &app.links[prev];
-                app.scroll = link.line.saturating_sub(view_h / 2);
-                app.status_message = Some(format!(
-                    "Link [{}/{}]: {} (Enter to follow)",
-                    prev + 1,
-                    app.links.len(),
-                    link.label
-                ));
-            }
+            app.cycle_links(false, view_h);
         }
         (KeyModifiers::NONE, KeyCode::Char(digit @ '1'..='9')) => {
             let link_idx = (digit as usize) - ('1' as usize);
@@ -247,6 +231,37 @@ fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<()> {
     Ok(())
 }
 
+fn open_url_in_browser(url: &str) -> std::io::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(url)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(url)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", url])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()?;
+    }
+    Ok(())
+}
+
 fn follow_selected_link(app: &mut App) {
     if let Some(idx) = app.selected_link_idx {
         if let Some(target) = app.links.get(idx).map(|l| l.target.clone()) {
@@ -259,9 +274,14 @@ fn follow_selected_link(app: &mut App) {
                         }
                     }
                 }
-                LinkTarget::External(url) => {
-                    app.status_message = Some(format!("External link: {url}"));
-                }
+                LinkTarget::External(url) => match open_url_in_browser(&url) {
+                    Ok(()) => {
+                        app.status_message = Some(format!("Opened in browser: {url}"));
+                    }
+                    Err(err) => {
+                        app.status_message = Some(format!("Could not open browser ({err}): {url}"));
+                    }
+                },
                 LinkTarget::File { path, line_range } => {
                     let wiki = app.current_wiki.clone();
                     let path_str = path.to_string_lossy().into_owned();
@@ -515,7 +535,22 @@ fn handle_sidebar_key(app: &mut App, key: KeyEvent) -> Result<()> {
             app.sidebar_visible = false;
             app.mode = Mode::Normal;
         }
-        (KeyModifiers::NONE, KeyCode::Char('v')) | (KeyModifiers::NONE, KeyCode::Tab) => {
+        (KeyModifiers::NONE, KeyCode::Char('v')) => {
+            app.set_sidebar_mode(SidebarMode::Tree);
+        }
+        (KeyModifiers::NONE, KeyCode::Char('f')) => {
+            app.set_sidebar_mode(SidebarMode::Flat);
+        }
+        (KeyModifiers::NONE, KeyCode::Char('o')) => {
+            app.set_sidebar_mode(SidebarMode::Outline);
+        }
+        (KeyModifiers::NONE, KeyCode::Char('t')) => {
+            app.set_sidebar_mode(SidebarMode::Tags);
+        }
+        (KeyModifiers::NONE, KeyCode::Char('b')) | (KeyModifiers::NONE, KeyCode::Char('m')) => {
+            app.set_sidebar_mode(SidebarMode::Bookmarks);
+        }
+        (KeyModifiers::NONE, KeyCode::Tab) => {
             app.toggle_sidebar_mode();
         }
         (KeyModifiers::NONE, KeyCode::Char('j')) | (KeyModifiers::NONE, KeyCode::Down) => {
@@ -529,7 +564,7 @@ fn handle_sidebar_key(app: &mut App, key: KeyEvent) -> Result<()> {
                 app.status_message = Some(error.to_string());
             }
         }
-        (KeyModifiers::NONE, KeyCode::Char('f')) | (KeyModifiers::CONTROL, KeyCode::Char('p')) => {
+        (KeyModifiers::CONTROL, KeyCode::Char('p')) => {
             app.mode = Mode::Finder;
             app.finder_query.clear();
             app.update_finder_filter();
@@ -636,6 +671,9 @@ fn handle_graph_key(app: &mut App, key: KeyEvent) -> Result<()> {
         }
         (KeyModifiers::NONE, KeyCode::Enter) => {
             app.graph_open_selected();
+        }
+        (KeyModifiers::NONE, KeyCode::Char('a')) | (KeyModifiers::NONE, KeyCode::Char('g')) => {
+            app.toggle_graph_scope();
         }
         (KeyModifiers::NONE, KeyCode::Char('+')) | (KeyModifiers::NONE, KeyCode::Char('=')) => {
             app.graph_change_depth(1);

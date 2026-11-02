@@ -57,6 +57,20 @@ pub fn parse_markdown(content: &str) -> (Vec<String>, String, Vec<String>) {
                     current_heading.clear();
                 }
             }
+            Event::Start(Tag::Link { dest_url, .. })
+            | Event::Start(Tag::Image { dest_url, .. }) => {
+                let target = dest_url.trim();
+                let is_external = target.starts_with("http://")
+                    || target.starts_with("https://")
+                    || target.starts_with("mailto:")
+                    || target.starts_with('#');
+                if !target.is_empty() && !is_external {
+                    let clean = target.split('#').next().unwrap_or(target).trim();
+                    if !clean.is_empty() && !links.iter().any(|l| l == clean) {
+                        links.push(clean.to_string());
+                    }
+                }
+            }
             Event::Text(text) => {
                 let text_str = text.as_ref();
                 if in_heading {
@@ -154,8 +168,15 @@ fn collect_tags(text: &str, tags: &mut Vec<String>) {
 
 fn parse_latex_index_fields(
     source: &str,
-) -> (Option<String>, Vec<String>, Vec<String>, Vec<String>) {
+) -> (
+    Option<String>,
+    Vec<String>,
+    Vec<String>,
+    Vec<String>,
+    Vec<String>,
+) {
     let mut title = None;
+    let mut aliases = Vec::new();
     let mut headings = Vec::new();
     let mut tags = Vec::new();
     let mut links = Vec::new();
@@ -165,6 +186,28 @@ fn parse_latex_index_fields(
             collect_tags(comment, &mut tags);
         }
         let code_part = line.split('%').next().unwrap_or(line).trim();
+        // BibTeX entry detection: @article{citekey, / @book{citekey,
+        if let Some(after_at) = code_part.strip_prefix('@') {
+            if let Some(brace_pos) = after_at.find('{') {
+                let entry_type = after_at[..brace_pos].trim().to_ascii_lowercase();
+                if !entry_type.is_empty()
+                    && entry_type != "comment"
+                    && entry_type != "preamble"
+                    && entry_type != "string"
+                {
+                    let after_brace = &after_at[brace_pos + 1..];
+                    if let Some(comma_pos) = after_brace.find(',') {
+                        let cite_key = sanitize_text(after_brace[..comma_pos].trim());
+                        if !cite_key.is_empty() {
+                            if !aliases.contains(&cite_key) {
+                                aliases.push(cite_key.clone());
+                            }
+                            headings.push(format!("@{entry_type} {cite_key}"));
+                        }
+                    }
+                }
+            }
+        }
         if title.is_none() {
             if let Some(arg) = extract_latex_braced(code_part, "\\title") {
                 let clean = sanitize_text(&arg);
@@ -196,7 +239,17 @@ fn parse_latex_index_fields(
                 break;
             }
         }
-        for link_cmd in ["\\input", "\\include", "\\ref", "\\cite"] {
+        for link_cmd in [
+            "\\input",
+            "\\include",
+            "\\ref",
+            "\\cite",
+            "\\citep",
+            "\\citet",
+            "\\bibliography",
+            "\\addbibresource",
+            "\\includegraphics",
+        ] {
             if let Some(arg) = extract_latex_braced(code_part, link_cmd) {
                 for part in arg.split(',') {
                     let target = sanitize_text(part.trim());
@@ -215,7 +268,7 @@ fn parse_latex_index_fields(
         }
     }
 
-    (title, headings, tags, links)
+    (title, aliases, headings, tags, links)
 }
 
 fn extract_latex_braced(line: &str, cmd: &str) -> Option<String> {
@@ -324,11 +377,11 @@ pub fn parse_file(
                 .file_stem()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_default();
-            let (tex_title, headings, tags, links) = parse_latex_index_fields(&text);
+            let (tex_title, aliases, headings, tags, links) = parse_latex_index_fields(&text);
             let title = tex_title.unwrap_or(stem_title);
             (
                 sanitize_text(&title),
-                Vec::new(),
+                aliases,
                 tags,
                 headings,
                 sanitize_text(&text),
@@ -386,7 +439,7 @@ pub fn parse_file(
 
 /// Builds all index entries from scratch for a full rebuild (spec §15).
 pub fn build_all(wiki: &Wiki, config: &Config) -> Result<Vec<IndexEntry>> {
-    let paths = scan_wiki_paths(&wiki.root);
+    let paths = scan_wiki_paths(&wiki.root, &config.index);
 
     let max_size = config.index.max_file_size;
     let results: Vec<Result<Option<IndexEntry>>> = paths
@@ -433,7 +486,7 @@ pub fn compute_delta(
         existing_map.insert(state.relative.clone(), state);
     }
 
-    let paths = scan_wiki_paths(&wiki.root);
+    let paths = scan_wiki_paths(&wiki.root, &config.index);
     let mut seen_paths: HashSet<PathBuf> = HashSet::new();
 
     let mut delta = IndexDelta::default();
@@ -566,10 +619,10 @@ pub fn compute_delta(
     Ok(delta)
 }
 
-fn scan_wiki_paths(root: &Path) -> Vec<PathBuf> {
+fn scan_wiki_paths(root: &Path, config: &terminalwiki_core::config::IndexConfig) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     let walker = WalkBuilder::new(root)
-        .hidden(false)
+        .hidden(!config.hidden)
         .git_ignore(true)
         .build();
 
@@ -577,6 +630,26 @@ fn scan_wiki_paths(root: &Path) -> Vec<PathBuf> {
         if let Some(ft) = entry.file_type() {
             if ft.is_file() {
                 let path = entry.into_path();
+                if let Ok(rel) = path.strip_prefix(root) {
+                    // Unless config.hidden is true, ignore any file in a dot-directory (like .git, .obsidian, .trash)
+                    if !config.hidden
+                        && rel.components().any(|c| {
+                            matches!(c, std::path::Component::Normal(n) if n.to_string_lossy().starts_with('.'))
+                        })
+                    {
+                        continue;
+                    }
+                    // Always ignore version control internals
+                    if rel.components().any(|c| {
+                        matches!(
+                            c,
+                            std::path::Component::Normal(n)
+                                if matches!(n.to_str(), Some(".git" | ".hg" | ".svn" | ".jj" | ".trash"))
+                        )
+                    }) {
+                        continue;
+                    }
+                }
                 if path
                     .file_name()
                     .is_some_and(|name| name == WIKI_CONFIG_FILE || name == IGNORE_FILE)

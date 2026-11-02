@@ -109,14 +109,16 @@ pub fn render_path(
         }
         ContentType::Latex => {
             let text = String::from_utf8_lossy(bytes);
-            let is_tex_doc = path
+            let ext = path
                 .extension()
                 .and_then(|e| e.to_str())
-                .is_some_and(|e| e.eq_ignore_ascii_case("tex") || e.eq_ignore_ascii_case("latex"));
-            if is_tex_doc {
-                latex::render_latex(Some(path), &text, config, theme, color_mode)
-            } else {
-                render_code_file(&text, Some("LaTeX"), path, config, theme, color_mode, None)
+                .map(|e| e.to_ascii_lowercase());
+            match ext.as_deref() {
+                Some("tex") | Some("latex") => {
+                    latex::render_latex(Some(path), &text, config, theme, color_mode)
+                }
+                Some("bib") => latex::render_bibtex(Some(path), &text, config, theme, color_mode),
+                _ => render_code_file(&text, Some("LaTeX"), path, config, theme, color_mode, None),
             }
         }
         ContentType::Markdown => {

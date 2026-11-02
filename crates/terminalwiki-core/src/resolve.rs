@@ -27,7 +27,7 @@ use crate::wiki::{Wiki, WikiSet};
 
 /// Extensions tried when a name carries none, in priority order (spec §5, §6).
 pub const RESOLVE_EXTENSIONS: &[&str] = &[
-    "md", "markdown", "txt", "rst", "org", "tex", "rs", "py", "c", "h", "go", "sh",
+    "md", "markdown", "txt", "rst", "org", "tex", "bib", "pdf", "rs", "py", "c", "h", "go", "sh",
 ];
 
 /// What the user asked for on the command line (spec §8).

@@ -1,5 +1,5 @@
 //! ASCII/Unicode terminal rendering of a layout.
-use crate::graph::{SubGraph, WikiGraph};
+use crate::graph::{NodeKind, SubGraph, WikiGraph};
 use std::collections::HashMap;
 use terminalwiki_core::unicode::{display_width, truncate_display_width};
 
@@ -13,14 +13,11 @@ use terminalwiki_core::unicode::{display_width, truncate_display_width};
 const WIDE_CONTINUATION: char = '\u{0}';
 
 /// Where a node's label was placed on the canvas, in terminal columns.
-///
-/// The caller needs this to highlight a selected node: the rendered lines alone
-/// cannot say which run of characters belongs to which node, and searching for
-/// the title text breaks on duplicate or truncated labels.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LabelPlacement {
     /// Index into `WikiGraph::nodes`.
     pub node: usize,
+    pub kind: NodeKind,
     pub row: usize,
     /// First column of the label text.
     pub col: usize,
@@ -31,7 +28,7 @@ pub struct LabelPlacement {
     /// The label text exactly as drawn, so callers can restyle it in place
     /// without re-deriving truncation.
     pub text: String,
-    /// Column of the node's `•` / `●` marker.
+    /// Column of the node's glyph marker.
     pub marker_col: usize,
 }
 
@@ -127,13 +124,29 @@ pub fn render_graph(
             let (gx, gy) = to_grid(x, y);
             if gx >= 0 && gx < width as isize && gy >= 0 && gy < height as isize {
                 let (row, marker_col) = (gy as usize, gx as usize);
-                let char_repr = if n_idx == sub.center { '●' } else { '•' };
+                let node = &graph.nodes[n_idx];
+                let char_repr = match node.kind {
+                    NodeKind::Page => {
+                        if n_idx == sub.center {
+                            '●'
+                        } else {
+                            '•'
+                        }
+                    }
+                    NodeKind::Latex => '◆',
+                    NodeKind::Bibtex => '▲',
+                    NodeKind::Pdf => '■',
+                    NodeKind::CodeFile => 'λ',
+                    NodeKind::Asset => '◈',
+                    NodeKind::Wiki => '★',
+                };
                 grid[row][marker_col] = char_repr;
 
                 // A node with no room for a label still reports its marker, so
                 // callers can always highlight the selected node.
                 let mut placed = LabelPlacement {
                     node: n_idx,
+                    kind: node.kind.clone(),
                     row,
                     col: marker_col,
                     width: 0,

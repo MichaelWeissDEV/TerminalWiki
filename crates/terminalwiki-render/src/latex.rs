@@ -198,6 +198,124 @@ pub fn render_latex(
         .render_document(&doc)
 }
 
+/// Renders a BibTeX (`.bib`) bibliography file as a structured Markdown document.
+pub fn render_bibtex(
+    path: Option<&Path>,
+    source: &str,
+    config: &terminalwiki_core::config::Config,
+    theme: &Theme,
+    color_mode: ColorMode,
+) -> RenderedDocument {
+    let md = bibtex_to_markdown(path, source);
+    let doc = markdown::parse_markdown(&md);
+    let base_dir = path.and_then(|p| p.parent());
+    Renderer::new(config.render.max_content_width, theme, color_mode)
+        .with_base_dir(base_dir)
+        .render_document(&doc)
+}
+
+/// Converts a `.bib` file into structured Markdown with headings and clickable links.
+pub fn bibtex_to_markdown(path: Option<&Path>, source: &str) -> String {
+    let file_title = path
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "Bibliography.bib".to_string());
+    let mut out = format!("# 📚 Bibliography: {file_title}\n\n");
+
+    let mut current_type = String::new();
+    let mut current_key = String::new();
+    let mut fields: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    let mut in_entry = false;
+
+    let flush_entry = |out: &mut String,
+                       entry_type: &str,
+                       cite_key: &str,
+                       fields: &std::collections::BTreeMap<String, String>| {
+        if cite_key.is_empty() {
+            return;
+        }
+        out.push_str(&format!("## @{entry_type} `{cite_key}`\n\n"));
+        if let Some(title) = fields.get("title") {
+            out.push_str(&format!("- **Title:** {}\n", convert_inline_latex(title)));
+        }
+        if let Some(author) = fields.get("author") {
+            out.push_str(&format!("- **Author:** {}\n", convert_inline_latex(author)));
+        }
+        if let Some(year) = fields.get("year") {
+            out.push_str(&format!("- **Year:** {year}\n"));
+        }
+        if let Some(venue) = fields.get("journal").or_else(|| fields.get("booktitle")) {
+            out.push_str(&format!("- **Venue:** {}\n", convert_inline_latex(venue)));
+        }
+        if let Some(url) = fields.get("url") {
+            out.push_str(&format!("- **URL:** [{url}]({url})\n"));
+        } else if let Some(doi) = fields.get("doi") {
+            let doi_url = if doi.starts_with("http") {
+                doi.clone()
+            } else {
+                format!("https://doi.org/{doi}")
+            };
+            out.push_str(&format!("- **DOI:** [{doi}]({doi_url})\n"));
+        }
+        if let Some(file) = fields.get("file") {
+            let clean_file = file
+                .split(':')
+                .find(|p| p.ends_with(".pdf"))
+                .unwrap_or(file);
+            out.push_str(&format!("- **File:** [[{clean_file}]]\n"));
+        }
+        out.push('\n');
+    };
+
+    for line in source.lines() {
+        let trimmed = line.split('%').next().unwrap_or(line).trim();
+        if let Some(after_at) = trimmed.strip_prefix('@') {
+            if in_entry {
+                flush_entry(&mut out, &current_type, &current_key, &fields);
+                fields.clear();
+            }
+            if let Some(brace_pos) = after_at.find('{') {
+                current_type = after_at[..brace_pos].trim().to_ascii_lowercase();
+                let after_brace = &after_at[brace_pos + 1..];
+                current_key = after_brace
+                    .split(',')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                in_entry = !current_key.is_empty();
+            }
+            continue;
+        }
+        if in_entry {
+            if trimmed == "}" {
+                flush_entry(&mut out, &current_type, &current_key, &fields);
+                fields.clear();
+                in_entry = false;
+                continue;
+            }
+            if let Some((k, v)) = trimmed.split_once('=') {
+                let key = k.trim().to_ascii_lowercase();
+                let val = v
+                    .trim()
+                    .trim_end_matches(',')
+                    .trim()
+                    .trim_matches(|c| c == '{' || c == '}' || c == '"')
+                    .trim()
+                    .to_string();
+                if !key.is_empty() && !val.is_empty() {
+                    fields.insert(key, val);
+                }
+            }
+        }
+    }
+    if in_entry {
+        flush_entry(&mut out, &current_type, &current_key, &fields);
+    }
+
+    out
+}
+
 /// Metadata extracted from a LaTeX document for wiki indexing (`terminalwiki-index`).
 #[derive(Debug, Default, Clone)]
 pub struct LatexIndexMetadata {
@@ -1050,7 +1168,7 @@ pub fn convert_inline_latex(input: &str) -> String {
                     }
                 }
                 "\\ref" | "\\eqref" | "\\autoref" | "\\nameref" | "\\cite" | "\\citep"
-                | "\\citet" | "\\input" | "\\include" => {
+                | "\\citet" | "\\input" | "\\include" | "\\bibliography" | "\\addbibresource" => {
                     let after_opt =
                         if let Some((_, rem)) = extract_bracket_group(after_cmd.trim_start()) {
                             rem.trim_start()

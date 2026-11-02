@@ -403,3 +403,82 @@ fn latex_pages_can_be_created_rendered_and_tagged_in_tui() {
         "tagged .tex page must be discoverable via #tag filter"
     );
 }
+
+#[test]
+fn daily_notes_todos_bookmarks_and_global_graph_flow() {
+    let _guard = lock_tests();
+    let fx = fixture();
+    let mut app = app(&fx, "Source");
+
+    // 1. Daily notes via 'd'
+    press(&mut app, KeyCode::Char('d'));
+    assert_eq!(app.mode, Mode::Normal);
+    let today_path = format!(
+        "Daily/{}.md",
+        terminalwiki_tui::app::App::current_date_string()
+    );
+    assert_eq!(app.current_path.to_string_lossy(), today_path);
+    assert!(app.raw_content.contains("#daily"));
+    assert!(app.raw_content.contains("#todo"));
+    assert!(app.raw_content.contains("- [ ]"));
+
+    // 2. Toggle todo via 'x'
+    press(&mut app, KeyCode::Char('x'));
+    assert!(
+        app.raw_content.contains("- [x]"),
+        "Todo checkbox should toggle to - [x]"
+    );
+    press(&mut app, KeyCode::Char(' '));
+    assert!(
+        app.raw_content.contains("- [ ]"),
+        "Todo checkbox should toggle back to - [ ]"
+    );
+
+    // 3. Bookmarks via 'm'
+    assert!(!app.bookmarks.contains(&app.current_path));
+    press(&mut app, KeyCode::Char('m'));
+    assert!(app.bookmarks.contains(&app.current_path));
+    press(&mut app, KeyCode::Char('m'));
+    assert!(!app.bookmarks.contains(&app.current_path));
+    press(&mut app, KeyCode::Char('m')); // keep bookmarked
+
+    // 4. Link filter toggle via 'L'
+    assert_eq!(app.link_filter, terminalwiki_tui::app::LinkFilter::All);
+    handle_terminal_event(
+        &mut app,
+        Event::Key(KeyEvent::new(KeyCode::Char('L'), KeyModifiers::SHIFT)),
+    )
+    .expect("toggle link filter");
+    assert_eq!(
+        app.link_filter,
+        terminalwiki_tui::app::LinkFilter::InternalOnly
+    );
+
+    // 5. Global Knowledge Graph and Enter navigation
+    app.load_page("vault", "Source", true).expect("load Source");
+    press(&mut app, KeyCode::Char('g'));
+    assert_eq!(app.mode, Mode::Graph);
+    assert!(!app.graph_view.as_ref().unwrap().is_global);
+
+    // Toggle to global vault graph via 'a'
+    press(&mut app, KeyCode::Char('a'));
+    assert!(app.graph_view.as_ref().unwrap().is_global);
+
+    // Enter opens selected note
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.mode, Mode::Normal);
+
+    // 6. Sidebar modes cycling
+    press(&mut app, KeyCode::Char('s'));
+    assert_eq!(app.mode, Mode::Sidebar);
+    assert_eq!(app.sidebar_mode, SidebarMode::Flat);
+    press(&mut app, KeyCode::Tab);
+    assert_eq!(app.sidebar_mode, SidebarMode::Tree);
+    press(&mut app, KeyCode::Tab);
+    assert_eq!(app.sidebar_mode, SidebarMode::Outline);
+    press(&mut app, KeyCode::Tab);
+    assert_eq!(app.sidebar_mode, SidebarMode::Tags);
+    press(&mut app, KeyCode::Tab);
+    assert_eq!(app.sidebar_mode, SidebarMode::Bookmarks);
+    assert!(!app.sidebar_entries().is_empty());
+}
