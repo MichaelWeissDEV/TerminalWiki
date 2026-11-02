@@ -182,6 +182,51 @@ mod frontmatter_render_tests {
         assert!(out.contains("Before."), "content before rule lost:\n{out}");
         assert!(out.contains("After."), "content after rule lost:\n{out}");
     }
+
+    #[test]
+    fn rendered_links_have_precise_unicode_cell_regions() {
+        let doc = render_markdown_raw(
+            "前 [[One]] then [[Two]]",
+            &Config::default(),
+            &Theme::Mono,
+            ColorMode::Never,
+        );
+        assert_eq!(doc.links.len(), 2);
+        assert_eq!(
+            (doc.links[0].start_column, doc.links[0].end_column),
+            (3, 10)
+        );
+        assert_eq!(
+            (doc.links[1].start_column, doc.links[1].end_column),
+            (16, 23)
+        );
+    }
+
+    #[test]
+    fn footnote_definitions_are_visible_in_terminal_output() {
+        let out = render_to_text("Text[^n].\n\n[^n]: Footnote body.\n");
+        assert!(out.contains("[^n]"), "footnote marker missing:\n{out}");
+        assert!(
+            out.contains("Footnote body."),
+            "footnote body missing:\n{out}"
+        );
+    }
+
+    #[test]
+    fn note_embeds_are_clickable_navigation_fallbacks() {
+        let doc = render_markdown_raw(
+            "![[Guide#Install]]",
+            &Config::default(),
+            &Theme::Mono,
+            ColorMode::Never,
+        );
+        assert_eq!(doc.links.len(), 1);
+        assert!(matches!(
+            &doc.links[0].target,
+            LinkTarget::Wiki { page, anchor, .. }
+                if page == "Guide" && anchor.as_deref() == Some("Install")
+        ));
+    }
 }
 
 #[cfg(test)]

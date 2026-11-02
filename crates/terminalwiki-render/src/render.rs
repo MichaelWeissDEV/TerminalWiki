@@ -168,6 +168,26 @@ impl<'a> Renderer<'a> {
                 }]);
             }
 
+            Block::FootnoteDefinition { name, content } => {
+                let footnote_style = self.theme.style(SemanticColor::Muted);
+                rdoc.lines.push(vec![Span {
+                    text: format!("{indent}[^{}]", name),
+                    style: footnote_style.clone(),
+                }]);
+                for block in content {
+                    let mut sub_rdoc = RenderedDocument::default();
+                    self.render_block(block, &mut sub_rdoc, 0);
+                    for line in sub_rdoc.lines {
+                        let mut row = vec![Span {
+                            text: format!("{indent}  "),
+                            style: footnote_style.clone(),
+                        }];
+                        row.extend(line);
+                        rdoc.lines.push(row);
+                    }
+                }
+            }
+
             Block::List {
                 ordered,
                 start,
@@ -228,10 +248,32 @@ impl<'a> Renderer<'a> {
             }
 
             Block::Image { alt, url } => {
-                rdoc.lines.push(vec![Span {
-                    text: format!("{indent}[image: {alt} ({url})]"),
-                    style: self.theme.style(SemanticColor::Muted).italic(),
-                }]);
+                if is_image_asset(url) {
+                    rdoc.lines.push(vec![Span {
+                        text: format!("{indent}[image: {alt} ({url})]"),
+                        style: self.theme.style(SemanticColor::Muted).italic(),
+                    }]);
+                } else {
+                    // pulldown-cmark maps Obsidian `![[Note#Heading]]` to an
+                    // image event. A non-image destination is therefore a
+                    // safe, navigable text fallback rather than a misleading
+                    // broken image placeholder.
+                    let (display_text, link_target) = wiki_link_target(url, Some(alt.clone()));
+                    let display = format!("{indent}↳ [[{display_text}]]");
+                    let line = rdoc.lines.len();
+                    let start_column = display_width(&indent) + display_width("↳ ");
+                    rdoc.links.push(RenderedLink {
+                        line,
+                        start_column,
+                        end_column: start_column + display_width(&format!("[[{display_text}]]")),
+                        target: link_target,
+                        label: display_text,
+                    });
+                    rdoc.lines.push(vec![Span {
+                        text: display,
+                        style: self.theme.style(SemanticColor::Link).bold(),
+                    }]);
+                }
             }
 
             Block::Math(formula) => {
@@ -247,8 +289,25 @@ impl<'a> Renderer<'a> {
     }
 
     fn render_inlines(&self, inlines: &[Inline], rdoc: &mut RenderedDocument) -> Vec<Span> {
-        let mut spans = Vec::new();
+        self.render_inlines_at(inlines, rdoc, 0)
+    }
+
+    /// Renders an inline run while retaining the absolute cell offset used by
+    /// link hit regions. Formatting nodes recurse with their current offset,
+    /// so links after text or inside emphasis are addressable precisely.
+    fn render_inlines_at(
+        &self,
+        inlines: &[Inline],
+        rdoc: &mut RenderedDocument,
+        base_column: usize,
+    ) -> Vec<Span> {
+        let mut spans: Vec<Span> = Vec::new();
         for inline in inlines {
+            let start_column = base_column
+                + spans
+                    .iter()
+                    .map(|span| display_width(&span.text))
+                    .sum::<usize>();
             match inline {
                 Inline::Text(t) => {
                     spans.push(Span {
@@ -257,19 +316,19 @@ impl<'a> Renderer<'a> {
                     });
                 }
                 Inline::Bold(inner) => {
-                    for mut s in self.render_inlines(inner, rdoc) {
+                    for mut s in self.render_inlines_at(inner, rdoc, start_column) {
                         s.style = s.style.bold();
                         spans.push(s);
                     }
                 }
                 Inline::Italic(inner) => {
-                    for mut s in self.render_inlines(inner, rdoc) {
+                    for mut s in self.render_inlines_at(inner, rdoc, start_column) {
                         s.style = s.style.italic();
                         spans.push(s);
                     }
                 }
                 Inline::Strike(inner) => {
-                    for mut s in self.render_inlines(inner, rdoc) {
+                    for mut s in self.render_inlines_at(inner, rdoc, start_column) {
                         s.style.strikethrough = true;
                         spans.push(s);
                     }
@@ -298,64 +357,26 @@ impl<'a> Renderer<'a> {
                     };
                     rdoc.links.push(RenderedLink {
                         line: line_no,
-                        start_column: 0,
-                        end_column: display_width(&label),
+                        start_column,
+                        end_column: start_column + display_width(&label),
                         target: link_target,
                         label: label.clone(),
                     });
-                    for mut s in self.render_inlines(text, rdoc) {
+                    for mut s in self.render_inlines_at(text, rdoc, start_column) {
                         s.style = self.theme.style(SemanticColor::Link).underline();
                         spans.push(s);
                     }
                 }
                 Inline::WikiLink { target, label } => {
                     let line_no = rdoc.lines.len();
-                    let parsed = terminalwiki_core::link::WikiLink::parse_inner(target);
-                    let (display_text, link_target) = match parsed {
-                        Some(wl) => {
-                            let dt = label.clone().unwrap_or_else(|| wl.display_text());
-                            let lt = match wl.target {
-                                terminalwiki_core::link::LinkTarget::Page {
-                                    wiki,
-                                    name,
-                                    anchor,
-                                } => LinkTarget::Wiki {
-                                    wiki,
-                                    page: name,
-                                    anchor,
-                                },
-                                terminalwiki_core::link::LinkTarget::File {
-                                    path, lines, ..
-                                } => LinkTarget::File {
-                                    path: std::path::PathBuf::from(path),
-                                    line_range: lines.map(|l| (l.start as usize, l.end as usize)),
-                                },
-                                terminalwiki_core::link::LinkTarget::Symbol { name } => {
-                                    LinkTarget::Wiki {
-                                        wiki: None,
-                                        page: name,
-                                        anchor: None,
-                                    }
-                                }
-                            };
-                            (dt, lt)
-                        }
-                        None => (
-                            label.clone().unwrap_or_else(|| target.clone()),
-                            LinkTarget::Wiki {
-                                wiki: None,
-                                page: target.clone(),
-                                anchor: None,
-                            },
-                        ),
-                    };
+                    let (display_text, link_target) = wiki_link_target(target, label.clone());
 
                     let full_display = format!("[[{display_text}]]");
 
                     rdoc.links.push(RenderedLink {
                         line: line_no,
-                        start_column: 0,
-                        end_column: display_width(&full_display),
+                        start_column,
+                        end_column: start_column + display_width(&full_display),
                         target: link_target,
                         label: display_text,
                     });
@@ -486,5 +507,52 @@ impl<'a> Renderer<'a> {
             }]);
         }
         result
+    }
+}
+
+fn is_image_asset(url: &str) -> bool {
+    matches!(
+        url.split('#')
+            .next()
+            .and_then(|path| std::path::Path::new(path).extension())
+            .and_then(|extension| extension.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "svg")
+    )
+}
+
+fn wiki_link_target(target: &str, label: Option<String>) -> (String, LinkTarget) {
+    match terminalwiki_core::link::WikiLink::parse_inner(target) {
+        Some(wiki_link) => {
+            let display = label.unwrap_or_else(|| wiki_link.display_text());
+            let target = match wiki_link.target {
+                terminalwiki_core::link::LinkTarget::Page { wiki, name, anchor } => {
+                    LinkTarget::Wiki {
+                        wiki,
+                        page: name,
+                        anchor,
+                    }
+                }
+                terminalwiki_core::link::LinkTarget::File { path, lines, .. } => LinkTarget::File {
+                    path: std::path::PathBuf::from(path),
+                    line_range: lines.map(|lines| (lines.start as usize, lines.end as usize)),
+                },
+                terminalwiki_core::link::LinkTarget::Symbol { name } => LinkTarget::Wiki {
+                    wiki: None,
+                    page: name,
+                    anchor: None,
+                },
+            };
+            (display, target)
+        }
+        None => (
+            label.unwrap_or_else(|| target.to_string()),
+            LinkTarget::Wiki {
+                wiki: None,
+                page: target.to_string(),
+                anchor: None,
+            },
+        ),
     }
 }

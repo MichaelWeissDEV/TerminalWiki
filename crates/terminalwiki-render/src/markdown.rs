@@ -32,6 +32,7 @@ pub fn parse_markdown(text: &str) -> Document {
 
     let mut current_code_block: Option<Option<String>> = None;
     let mut current_code_content = String::new();
+    let mut footnote_stack = Vec::new();
 
     // Table state
     let mut in_table = false;
@@ -112,6 +113,18 @@ pub fn parse_markdown(text: &str) -> Document {
                     .last_mut()
                     .unwrap()
                     .push(Block::BlockQuote(inner));
+            }
+            Event::Start(Tag::FootnoteDefinition(name)) => {
+                block_stack.push(Vec::new());
+                footnote_stack.push(name.to_string());
+            }
+            Event::End(TagEnd::FootnoteDefinition) => {
+                let content = block_stack.pop().unwrap_or_default();
+                let name = footnote_stack.pop().unwrap_or_default();
+                block_stack
+                    .last_mut()
+                    .unwrap()
+                    .push(Block::FootnoteDefinition { name, content });
             }
 
             // ─── Lists ───────────────────────────────────────────────────────────
@@ -304,8 +317,125 @@ pub fn parse_markdown(text: &str) -> Document {
         }
     }
 
-    doc.blocks = block_stack.pop().unwrap_or_default();
+    doc.blocks = normalize_callouts(block_stack.pop().unwrap_or_default());
     doc
+}
+
+/// Converts block quotes whose first line is an Obsidian callout header into a
+/// semantic callout block. Keeping this as a post-parse transformation lets
+/// pulldown-cmark retain its normal block quote and nested-block semantics.
+fn normalize_callouts(blocks: Vec<Block>) -> Vec<Block> {
+    blocks
+        .into_iter()
+        .map(|block| match block {
+            Block::BlockQuote(mut content) => {
+                content = normalize_callouts(content);
+                let Some(Block::Paragraph(header)) = content.first() else {
+                    return Block::BlockQuote(content);
+                };
+                let Some((kind, title, remainder)) = parse_callout_header(header) else {
+                    return Block::BlockQuote(content);
+                };
+                content.remove(0);
+                if !remainder.is_empty() {
+                    content.insert(0, Block::Paragraph(remainder));
+                }
+                Block::Callout {
+                    kind,
+                    title,
+                    content,
+                }
+            }
+            Block::List {
+                ordered,
+                start,
+                items,
+            } => Block::List {
+                ordered,
+                start,
+                items: items.into_iter().map(normalize_callouts).collect(),
+            },
+            Block::Callout {
+                kind,
+                title,
+                content,
+            } => Block::Callout {
+                kind,
+                title,
+                content: normalize_callouts(content),
+            },
+            Block::FootnoteDefinition { name, content } => Block::FootnoteDefinition {
+                name,
+                content: normalize_callouts(content),
+            },
+            other => other,
+        })
+        .collect()
+}
+
+/// Parses the first, textual inline of an Obsidian callout header.
+///
+/// Folding markers (`+` and `-`) are intentionally accepted and discarded for
+/// now: the terminal reader renders all callout contents expanded rather than
+/// exposing an inaccessible collapsed state.
+fn parse_callout_header(inlines: &[Inline]) -> Option<(String, Option<String>, Vec<Inline>)> {
+    // With `ENABLE_WIKILINKS`, pulldown-cmark can split `[!NOTE]` into
+    // separate text events (`[`, `!NOTE`, `]`). Reassemble only this leading
+    // sequence; no formatting is accepted inside a callout marker.
+    let mut marker = String::new();
+    let mut marker_end = None;
+    for (index, inline) in inlines.iter().enumerate() {
+        let Inline::Text(text) = inline else {
+            return None;
+        };
+        marker.push_str(text);
+        if let Some(close) = marker.find(']') {
+            marker_end = Some((index, close));
+            break;
+        }
+        if marker.len() > 128 {
+            return None;
+        }
+    }
+    let (marker_index, close) = marker_end?;
+    let rest = marker.strip_prefix("[!")?;
+    let kind = &rest[..close - 2];
+    if kind.is_empty()
+        || !kind.chars().all(|character| {
+            character.is_ascii_alphanumeric() || character == '-' || character == '_'
+        })
+    {
+        return None;
+    }
+    let marker_tail = &marker[close + 1..];
+    let (title, remainder_start) = if !marker_tail.is_empty() {
+        (callout_title(marker_tail), marker_index + 1)
+    } else if let Some(Inline::Text(next)) = inlines.get(marker_index + 1) {
+        // A standalone space is the soft break inserted between a header-only
+        // marker and its body. A non-empty chunk is the optional header title.
+        if next == " " {
+            (None, marker_index + 2)
+        } else {
+            (callout_title(next), marker_index + 2)
+        }
+    } else {
+        (None, marker_index + 1)
+    };
+    Some((
+        kind.to_ascii_uppercase(),
+        title,
+        inlines[remainder_start..].to_vec(),
+    ))
+}
+
+fn callout_title(value: &str) -> Option<String> {
+    let value = value.trim();
+    let value = value
+        .strip_prefix('+')
+        .or_else(|| value.strip_prefix('-'))
+        .unwrap_or(value);
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
 }
 
 fn normalize_math_delimiters(text: &str) -> String {
@@ -457,6 +587,57 @@ mod tests {
         assert!(matches!(
             &doc.blocks[2],
             Block::Paragraph(inlines) if inlines.iter().any(|inline| matches!(inline, Inline::Code(_)))
+        ));
+    }
+
+    #[test]
+    fn parses_obsidian_callouts_and_preserves_their_content() {
+        let doc = parse_markdown(
+            "> [!warning]- Careful\n> This remains readable in the terminal.\n>\n> - nested detail\n",
+        );
+        assert_eq!(doc.blocks.len(), 1);
+        match &doc.blocks[0] {
+            Block::Callout {
+                kind,
+                title,
+                content,
+            } => {
+                assert_eq!(kind, "WARNING");
+                assert_eq!(title.as_deref(), Some("Careful"));
+                assert!(content.iter().any(|block| matches!(
+                    block,
+                    Block::Paragraph(inlines) if inlines.iter().any(|inline| inline.plain_text().contains("This remains readable"))
+                )));
+                assert!(content
+                    .iter()
+                    .any(|block| matches!(block, Block::List { .. })));
+            }
+            other => panic!("expected callout, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn does_not_turn_an_ordinary_quote_into_a_callout() {
+        let doc = parse_markdown("> [normal text] is still a quote\n");
+        assert!(matches!(doc.blocks.as_slice(), [Block::BlockQuote(_)]));
+    }
+
+    #[test]
+    fn keeps_footnote_definitions_as_readable_blocks() {
+        let doc = parse_markdown("A reference[^note].\n\n[^note]: Detail with **formatting**.\n");
+        assert!(matches!(
+            doc.blocks.last(),
+            Some(Block::FootnoteDefinition { name, content })
+                if name == "note" && !content.is_empty()
+        ));
+    }
+
+    #[test]
+    fn parses_obsidian_embed_as_an_image_event_for_rendering() {
+        let doc = parse_markdown("![[diagram.png]]");
+        assert!(matches!(
+            doc.blocks.as_slice(),
+            [Block::Image { alt, url }] if alt == "diagram.png" && url == "diagram.png"
         ));
     }
 

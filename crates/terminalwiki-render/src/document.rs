@@ -120,6 +120,11 @@ pub enum Block {
         title: Option<String>,
         content: Vec<Block>,
     },
+    /// A named Markdown footnote definition.
+    FootnoteDefinition {
+        name: String,
+        content: Vec<Block>,
+    },
     Math(String),
 }
 
