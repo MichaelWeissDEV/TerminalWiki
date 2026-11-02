@@ -226,6 +226,58 @@ mod frontmatter_render_tests {
     }
 
     #[test]
+    fn wrapping_preserves_inline_styles() {
+        let mut config = Config::default();
+        config.render.max_content_width = 20;
+        let doc = render_markdown_raw(
+            "start **bold words that wrap** end",
+            &config,
+            &Theme::Mono,
+            ColorMode::Never,
+        );
+        let styled: Vec<&str> = doc
+            .lines
+            .iter()
+            .flat_map(|line| line.iter())
+            .filter(|span| span.style.bold)
+            .map(|span| span.text.as_str())
+            .collect();
+        assert!(
+            styled.iter().any(|text| text.contains("bold")),
+            "{styled:?}"
+        );
+        assert!(
+            styled.iter().any(|text| text.contains("wrap")),
+            "bold style lost after wrapping: {styled:?}"
+        );
+    }
+
+    #[test]
+    fn wrapped_link_hitbox_points_at_its_visual_line() {
+        let mut config = Config::default();
+        config.render.max_content_width = 20;
+        let doc = render_markdown_raw(
+            "one two three four five six seven [[Target]] tail",
+            &config,
+            &Theme::Mono,
+            ColorMode::Never,
+        );
+        assert_eq!(doc.links.len(), 1);
+        let link = &doc.links[0];
+        assert!(link.line > 0, "link should be on a wrapped line: {link:?}");
+        let plain: String = doc.lines[link.line]
+            .iter()
+            .map(|span| span.text.as_str())
+            .collect();
+        let cells: String = plain
+            .chars()
+            .skip(link.start_column)
+            .take(link.end_column - link.start_column)
+            .collect();
+        assert_eq!(cells, "[[Target]]", "wrong hitbox in line {plain:?}");
+    }
+
+    #[test]
     fn duplicate_headings_receive_unique_suffix_anchors() {
         let doc = render_markdown_raw(
             "# Setup\n\n## Setup\n\n## Setup\n",

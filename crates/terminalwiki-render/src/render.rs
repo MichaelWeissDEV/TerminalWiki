@@ -12,7 +12,6 @@ use crate::document::{
 use crate::highlight::highlight;
 use crate::math::layout_math;
 use crate::theme::{SemanticColor, Theme};
-use crate::width::wrap_text;
 
 pub struct Renderer<'a> {
     max_content_width: usize,
@@ -91,12 +90,16 @@ impl<'a> Renderer<'a> {
             }
 
             Block::Paragraph(inlines) => {
-                let rendered_spans = self.render_inlines(inlines, rdoc);
-                let wrapped = self.wrap_spans(
-                    rendered_spans,
-                    self.max_content_width.saturating_sub(indent_level * 2),
-                );
-                for line in wrapped {
+                let (spans, marks) = self.inline_runs(inlines);
+                let width = self
+                    .max_content_width
+                    .saturating_sub(indent_level * 2)
+                    .max(1);
+                let wrapped = wrap_styled(&spans, width);
+                let base_line = rdoc.lines.len();
+                let indent_width = display_width(&indent);
+
+                for wrapped_line in &wrapped {
                     let mut full_line = Vec::new();
                     if !indent.is_empty() {
                         full_line.push(Span {
@@ -104,8 +107,38 @@ impl<'a> Renderer<'a> {
                             style: Style::new(),
                         });
                     }
-                    full_line.extend(line);
+                    full_line.extend(wrapped_line.spans.iter().cloned());
                     rdoc.lines.push(full_line);
+                }
+
+                for mark in marks {
+                    let mut emitted = false;
+                    for (index, wrapped_line) in wrapped.iter().enumerate() {
+                        let start = mark.start.max(wrapped_line.start);
+                        let end = mark.end.min(wrapped_line.end);
+                        if start >= end {
+                            continue;
+                        }
+                        emitted = true;
+                        rdoc.links.push(RenderedLink {
+                            line: base_line + index,
+                            start_column: indent_width + (start - wrapped_line.start),
+                            end_column: indent_width + (end - wrapped_line.start),
+                            target: mark.target.clone(),
+                            label: mark.label.clone(),
+                        });
+                    }
+                    if !emitted {
+                        // Zero-width or fully elided link: keep it attached to
+                        // the first line so keyboard cycling still reaches it.
+                        rdoc.links.push(RenderedLink {
+                            line: base_line,
+                            start_column: indent_width,
+                            end_column: indent_width,
+                            target: mark.target,
+                            label: mark.label,
+                        });
+                    }
                 }
             }
 
@@ -140,19 +173,14 @@ impl<'a> Renderer<'a> {
             }
 
             Block::BlockQuote(blocks) => {
-                let quote_prefix = format!("{indent}│ ");
-                let quote_style = self.theme.style(SemanticColor::Muted);
+                let prefix = Span {
+                    text: format!("{indent}│ "),
+                    style: self.theme.style(SemanticColor::Muted),
+                };
                 for b in blocks {
                     let mut sub_rdoc = RenderedDocument::default();
                     self.render_block(b, &mut sub_rdoc, 0, heading_anchors);
-                    for line in sub_rdoc.lines {
-                        let mut row = vec![Span {
-                            text: quote_prefix.clone(),
-                            style: quote_style.clone(),
-                        }];
-                        row.extend(line);
-                        rdoc.lines.push(row);
-                    }
+                    self.append_sub(rdoc, sub_rdoc, &prefix, &prefix, true);
                 }
             }
 
@@ -174,17 +202,14 @@ impl<'a> Renderer<'a> {
                     },
                 ]);
 
+                let prefix = Span {
+                    text: format!("{indent}│  "),
+                    style: self.theme.style(SemanticColor::Muted),
+                };
                 for b in content {
                     let mut sub_rdoc = RenderedDocument::default();
                     self.render_block(b, &mut sub_rdoc, 0, heading_anchors);
-                    for line in sub_rdoc.lines {
-                        let mut row = vec![Span {
-                            text: format!("{indent}│  "),
-                            style: self.theme.style(SemanticColor::Muted),
-                        }];
-                        row.extend(line);
-                        rdoc.lines.push(row);
-                    }
+                    self.append_sub(rdoc, sub_rdoc, &prefix, &prefix, true);
                 }
                 rdoc.lines.push(vec![Span {
                     text: format!("{indent}└──"),
@@ -198,17 +223,14 @@ impl<'a> Renderer<'a> {
                     text: format!("{indent}[^{}]", name),
                     style: footnote_style.clone(),
                 }]);
+                let prefix = Span {
+                    text: format!("{indent}  "),
+                    style: footnote_style.clone(),
+                };
                 for block in content {
                     let mut sub_rdoc = RenderedDocument::default();
                     self.render_block(block, &mut sub_rdoc, 0, heading_anchors);
-                    for line in sub_rdoc.lines {
-                        let mut row = vec![Span {
-                            text: format!("{indent}  "),
-                            style: footnote_style.clone(),
-                        }];
-                        row.extend(line);
-                        rdoc.lines.push(row);
-                    }
+                    self.append_sub(rdoc, sub_rdoc, &prefix, &prefix, true);
                 }
             }
 
@@ -229,59 +251,60 @@ impl<'a> Renderer<'a> {
                     // Obsidian task items replace the bullet with a checkbox
                     // glyph rather than showing a bullet and a `[ ]` marker.
                     let mut body: &[Block] = item;
-                    let mut task_content: Option<Vec<Span>> = None;
+                    let mut task: Option<(Vec<Span>, Vec<LinkMark>)> = None;
                     if let Some(Block::TaskItem { checked, content }) = item.first() {
                         let glyph = if *checked { "☑" } else { "☐" };
                         marker = format!("{indent}{glyph} ");
-                        task_content = Some(self.render_inlines(content, rdoc));
+                        task = Some(self.inline_runs(content));
                         body = &item[1..];
                     }
 
-                    let padding = " ".repeat(display_width(&marker));
+                    let first_prefix = Span {
+                        text: marker.clone(),
+                        style: marker_style,
+                    };
+                    let rest_prefix = Span {
+                        text: " ".repeat(display_width(&marker)),
+                        style: Style::new(),
+                    };
                     let mut emitted_marker = false;
 
-                    if let Some(content) = task_content {
-                        let mut row = vec![Span {
-                            text: marker.clone(),
-                            style: marker_style.clone(),
-                        }];
-                        row.extend(content);
+                    if let Some((spans, marks)) = task {
+                        let line = rdoc.lines.len();
+                        let mut row = vec![first_prefix.clone()];
+                        row.extend(spans);
                         rdoc.lines.push(row);
                         emitted_marker = true;
+                        self.register_marks_on_line(
+                            rdoc,
+                            line,
+                            display_width(&first_prefix.text),
+                            &marks,
+                        );
                     }
 
                     for b in body {
                         let mut sub_rdoc = RenderedDocument::default();
                         self.render_block(b, &mut sub_rdoc, 0, heading_anchors);
-                        for line in sub_rdoc.lines {
-                            let mut row = Vec::new();
-                            if emitted_marker {
-                                row.push(Span {
-                                    text: padding.clone(),
-                                    style: Style::new(),
-                                });
-                            } else {
-                                row.push(Span {
-                                    text: marker.clone(),
-                                    style: marker_style.clone(),
-                                });
-                                emitted_marker = true;
-                            }
-                            row.extend(line);
-                            rdoc.lines.push(row);
-                        }
+                        let first = !emitted_marker;
+                        emitted_marker = true;
+                        self.append_sub(rdoc, sub_rdoc, &first_prefix, &rest_prefix, first);
                     }
                 }
             }
 
             Block::TaskItem { checked, content } => {
-                let marker = if *checked { " [x] " } else { " [ ] " };
+                let marker = if *checked { "☑ " } else { "☐ " };
+                let marker = format!("{indent}{marker}");
+                let (spans, marks) = self.inline_runs(content);
+                let line = rdoc.lines.len();
                 let mut row = vec![Span {
-                    text: format!("{indent}{marker}"),
+                    text: marker.clone(),
                     style: self.theme.style(SemanticColor::Accent),
                 }];
-                row.extend(self.render_inlines(content, rdoc));
+                row.extend(spans);
                 rdoc.lines.push(row);
+                self.register_marks_on_line(rdoc, line, display_width(&marker), &marks);
             }
 
             Block::Table { headers, rows } => {
@@ -337,26 +360,27 @@ impl<'a> Renderer<'a> {
         }
     }
 
-    fn render_inlines(&self, inlines: &[Inline], rdoc: &mut RenderedDocument) -> Vec<Span> {
-        self.render_inlines_at(inlines, rdoc, 0)
+    /// Renders an inline run into styled spans plus link marks. Marks carry
+    /// absolute cell offsets in the unwrapped run, which lets wrapped
+    /// paragraphs map hit regions onto the correct visual line.
+    fn inline_runs(&self, inlines: &[Inline]) -> (Vec<Span>, Vec<LinkMark>) {
+        let mut spans = Vec::new();
+        let mut marks = Vec::new();
+        self.collect_inlines(inlines, &mut spans, &mut marks);
+        (spans, marks)
     }
 
-    /// Renders an inline run while retaining the absolute cell offset used by
-    /// link hit regions. Formatting nodes recurse with their current offset,
-    /// so links after text or inside emphasis are addressable precisely.
-    fn render_inlines_at(
+    fn collect_inlines(
         &self,
         inlines: &[Inline],
-        rdoc: &mut RenderedDocument,
-        base_column: usize,
-    ) -> Vec<Span> {
-        let mut spans: Vec<Span> = Vec::new();
+        spans: &mut Vec<Span>,
+        marks: &mut Vec<LinkMark>,
+    ) {
         for inline in inlines {
-            let start_column = base_column
-                + spans
-                    .iter()
-                    .map(|span| display_width(&span.text))
-                    .sum::<usize>();
+            let start_column = spans
+                .iter()
+                .map(|span| display_width(&span.text))
+                .sum::<usize>();
             match inline {
                 Inline::Text(t) => {
                     spans.push(Span {
@@ -365,27 +389,32 @@ impl<'a> Renderer<'a> {
                     });
                 }
                 Inline::Bold(inner) => {
-                    for mut s in self.render_inlines_at(inner, rdoc, start_column) {
-                        s.style = s.style.bold();
-                        spans.push(s);
+                    let from = spans.len();
+                    self.collect_inlines(inner, spans, marks);
+                    for span in &mut spans[from..] {
+                        span.style.bold = true;
                     }
                 }
                 Inline::Italic(inner) => {
-                    for mut s in self.render_inlines_at(inner, rdoc, start_column) {
-                        s.style = s.style.italic();
-                        spans.push(s);
+                    let from = spans.len();
+                    self.collect_inlines(inner, spans, marks);
+                    for span in &mut spans[from..] {
+                        span.style.italic = true;
                     }
                 }
                 Inline::Strike(inner) => {
-                    for mut s in self.render_inlines_at(inner, rdoc, start_column) {
-                        s.style.strikethrough = true;
-                        spans.push(s);
+                    let from = spans.len();
+                    self.collect_inlines(inner, spans, marks);
+                    for span in &mut spans[from..] {
+                        span.style.strikethrough = true;
                     }
                 }
                 Inline::Highlight(inner) => {
-                    for mut s in self.render_inlines_at(inner, rdoc, start_column) {
-                        s.style = self.theme.style(SemanticColor::Selection).bold();
-                        spans.push(s);
+                    let from = spans.len();
+                    self.collect_inlines(inner, spans, marks);
+                    let highlight = self.theme.style(SemanticColor::Selection).bold();
+                    for span in &mut spans[from..] {
+                        span.style = highlight.clone();
                     }
                 }
                 Inline::Code(c) => {
@@ -395,7 +424,6 @@ impl<'a> Renderer<'a> {
                     });
                 }
                 Inline::Link { target, text } => {
-                    let line_no = rdoc.lines.len();
                     let label = text.iter().map(|i| i.plain_text()).collect::<String>();
                     let link_target = if let Some(anchor) = target.strip_prefix('#') {
                         LinkTarget::Heading(anchor.to_string())
@@ -410,28 +438,29 @@ impl<'a> Renderer<'a> {
                             line_range: None,
                         }
                     };
-                    rdoc.links.push(RenderedLink {
-                        line: line_no,
-                        start_column,
-                        end_column: start_column + display_width(&label),
-                        target: link_target,
-                        label: label.clone(),
-                    });
-                    for mut s in self.render_inlines_at(text, rdoc, start_column) {
-                        s.style = self.theme.style(SemanticColor::Link).underline();
-                        spans.push(s);
+                    let from = spans.len();
+                    self.collect_inlines(text, spans, marks);
+                    let end_column = spans
+                        .iter()
+                        .map(|span| display_width(&span.text))
+                        .sum::<usize>();
+                    let link_style = self.theme.style(SemanticColor::Link).underline();
+                    for span in &mut spans[from..] {
+                        span.style = link_style.clone();
                     }
+                    marks.push(LinkMark {
+                        start: start_column,
+                        end: end_column,
+                        target: link_target,
+                        label,
+                    });
                 }
                 Inline::WikiLink { target, label } => {
-                    let line_no = rdoc.lines.len();
                     let (display_text, link_target) = wiki_link_target(target, label.clone());
-
                     let full_display = format!("[[{display_text}]]");
-
-                    rdoc.links.push(RenderedLink {
-                        line: line_no,
-                        start_column,
-                        end_column: start_column + display_width(&full_display),
+                    marks.push(LinkMark {
+                        start: start_column,
+                        end: start_column + display_width(&full_display),
                         target: link_target,
                         label: display_text,
                     });
@@ -458,7 +487,69 @@ impl<'a> Renderer<'a> {
                 }
             }
         }
-        spans
+    }
+
+    fn register_marks_on_line(
+        &self,
+        rdoc: &mut RenderedDocument,
+        line: usize,
+        prefix_width: usize,
+        marks: &[LinkMark],
+    ) {
+        for mark in marks {
+            rdoc.links.push(RenderedLink {
+                line,
+                start_column: prefix_width + mark.start,
+                end_column: prefix_width + mark.end,
+                target: mark.target.clone(),
+                label: mark.label.clone(),
+            });
+        }
+    }
+
+    /// Appends a sub-document with a per-line prefix, shifting its link and
+    /// heading metadata into parent coordinates.
+    fn append_sub(
+        &self,
+        rdoc: &mut RenderedDocument,
+        sub: RenderedDocument,
+        first_prefix: &Span,
+        rest_prefix: &Span,
+        use_first_prefix: bool,
+    ) {
+        let base_line = rdoc.lines.len();
+        let first_width = display_width(&first_prefix.text);
+        let rest_width = display_width(&rest_prefix.text);
+        let mut emitted_first = !use_first_prefix;
+
+        for line in sub.lines {
+            let prefix = if emitted_first {
+                rest_prefix
+            } else {
+                emitted_first = true;
+                first_prefix
+            };
+            let mut row = vec![prefix.clone()];
+            row.extend(line);
+            rdoc.lines.push(row);
+        }
+
+        for mut link in sub.links {
+            link.line += base_line;
+            let width = if use_first_prefix && link.line == base_line {
+                first_width
+            } else {
+                rest_width
+            };
+            link.start_column += width;
+            link.end_column += width;
+            rdoc.links.push(link);
+        }
+
+        for mut heading in sub.headings {
+            heading.line += base_line;
+            rdoc.headings.push(heading);
+        }
     }
 
     fn render_table(
@@ -546,23 +637,138 @@ impl<'a> Renderer<'a> {
             rdoc.lines.push(row_spans);
         }
     }
+}
 
-    fn wrap_spans(&self, spans: Vec<Span>, max_width: usize) -> Vec<Vec<Span>> {
-        let plain_text: String = spans.iter().map(|s| s.text.as_str()).collect();
-        let wrapped_lines = wrap_text(&plain_text, max_width);
-        if wrapped_lines.len() <= 1 {
-            return vec![spans];
-        }
+/// A link whose hit region is expressed as absolute cell offsets in an
+/// unwrapped inline run.
+struct LinkMark {
+    start: usize,
+    end: usize,
+    target: LinkTarget,
+    label: String,
+}
 
-        let mut result = Vec::new();
-        for line in wrapped_lines {
-            result.push(vec![Span {
-                text: line,
-                style: self.theme.style(SemanticColor::Foreground),
-            }]);
+/// One wrapped visual line plus its cell range in the unwrapped run.
+struct WrappedLine {
+    spans: Vec<Span>,
+    start: usize,
+    end: usize,
+}
+
+fn char_width(character: char) -> usize {
+    unicode_width::UnicodeWidthChar::width(character).unwrap_or(0)
+}
+
+/// Word-wraps styled spans while preserving their styles and recording the
+/// original cell offsets needed to remap link hit regions.
+fn wrap_styled(spans: &[Span], max_width: usize) -> Vec<WrappedLine> {
+    let mut chars: Vec<(char, &Style)> = Vec::new();
+    for span in spans {
+        for character in span.text.chars() {
+            chars.push((character, &span.style));
         }
-        result
     }
+
+    let mut cell_before = Vec::with_capacity(chars.len() + 1);
+    let mut width = 0;
+    cell_before.push(0);
+    for (character, _) in &chars {
+        width += char_width(*character);
+        cell_before.push(width);
+    }
+
+    let mut result = Vec::new();
+    let mut index = 0;
+    while index < chars.len() {
+        while index < chars.len() && chars[index].0 == ' ' {
+            index += 1;
+        }
+        if index >= chars.len() {
+            break;
+        }
+
+        let line_start = index;
+        let mut line_end = index;
+        let mut line_width = 0;
+
+        while line_end < chars.len() {
+            let word_start = line_end;
+            let mut word_end = word_start;
+            let mut word_width = 0;
+            while word_end < chars.len() && chars[word_end].0 != ' ' {
+                word_width += char_width(chars[word_end].0);
+                word_end += 1;
+            }
+            if word_start == word_end {
+                break;
+            }
+
+            let needed = if line_width == 0 {
+                word_width
+            } else {
+                line_width + 1 + word_width
+            };
+
+            if line_width == 0 && word_width > max_width {
+                // Hard-break a single overlong word.
+                let mut taken = 0;
+                let mut cursor = word_start;
+                while cursor < word_end {
+                    let cell = char_width(chars[cursor].0);
+                    if taken + cell > max_width {
+                        break;
+                    }
+                    taken += cell;
+                    cursor += 1;
+                }
+                line_end = cursor;
+                break;
+            }
+
+            if line_width > 0 && needed > max_width {
+                break;
+            }
+
+            line_width = needed;
+            line_end = word_end;
+            if line_end < chars.len() && chars[line_end].0 == ' ' {
+                line_end += 1;
+            }
+        }
+
+        let mut end = line_end;
+        while end > line_start && chars[end - 1].0 == ' ' {
+            end -= 1;
+        }
+
+        let mut line_spans = Vec::new();
+        let mut cursor = line_start;
+        while cursor < end {
+            let style = chars[cursor].1.clone();
+            let mut text = String::new();
+            while cursor < end && chars[cursor].1 == &style {
+                text.push(chars[cursor].0);
+                cursor += 1;
+            }
+            line_spans.push(Span { text, style });
+        }
+
+        result.push(WrappedLine {
+            spans: line_spans,
+            start: cell_before[line_start],
+            end: cell_before[end],
+        });
+        index = line_end;
+    }
+
+    if result.is_empty() {
+        result.push(WrappedLine {
+            spans: Vec::new(),
+            start: 0,
+            end: 0,
+        });
+    }
+    result
 }
 
 fn is_image_asset(url: &str) -> bool {
