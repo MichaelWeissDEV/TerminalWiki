@@ -12,6 +12,7 @@ pub mod error;
 pub mod filetype;
 pub mod frontmatter;
 pub mod fuzzy;
+pub mod git;
 pub mod link;
 pub mod paths;
 pub mod resolve;

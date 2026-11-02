@@ -286,6 +286,7 @@ const COMMAND_LIST: &[&str] = &[
     "compile",
     "wiki",
     "reload",
+    "help",
     "quit",
 ];
 
@@ -415,6 +416,12 @@ pub const QUICK_COMMANDS: &[QuickCommandHit] = &[
         title: "Reload Current Page",
         shortcut: ":reload",
         description: "Re-read and re-render the current file from disk",
+    },
+    QuickCommandHit {
+        id: "help",
+        title: "Help & Shortcuts Cheat Sheet",
+        shortcut: "? / :help",
+        description: "Open comprehensive guide for keybindings, graph, latex, and modes",
     },
     QuickCommandHit {
         id: "quit",
@@ -840,6 +847,10 @@ impl<'a> App<'a> {
                         let _ = self.toggle_todo_on_current_line();
                     }
                     "reload" => self.reload_current_page(),
+                    "help" => {
+                        self.mode = Mode::Help;
+                        self.scroll = 0;
+                    }
                     "quit" => self.should_quit = true,
                     _ => {}
                 }
@@ -1809,6 +1820,10 @@ impl<'a> App<'a> {
                 let p = self.current_path.to_string_lossy().into_owned();
                 let _ = self.load_page(&self.current_wiki.clone(), &p, false);
                 self.status_message = Some("Page reloaded".to_string());
+            }
+            "help" | "?" => {
+                self.mode = Mode::Help;
+                self.scroll = 0;
             }
             "wiki" => {
                 if parts.len() > 1 {

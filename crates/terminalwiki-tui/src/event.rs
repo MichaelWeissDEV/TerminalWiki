@@ -150,6 +150,7 @@ fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<()> {
         }
         (KeyModifiers::NONE, KeyCode::Char('?')) => {
             app.mode = Mode::Help;
+            app.scroll = 0;
         }
         (KeyModifiers::NONE, KeyCode::Char('/')) | (KeyModifiers::CONTROL, KeyCode::Char('f')) => {
             app.mode = Mode::InPageSearch;
@@ -437,9 +438,28 @@ fn handle_command_key(app: &mut App, key: KeyEvent) -> Result<()> {
 }
 
 fn handle_help_key(app: &mut App, key: KeyEvent) -> Result<()> {
-    match key.code {
-        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') | KeyCode::Enter => {
+    match (key.modifiers, key.code) {
+        (_, KeyCode::Esc)
+        | (KeyModifiers::NONE, KeyCode::Char('q'))
+        | (KeyModifiers::NONE, KeyCode::Char('?'))
+        | (KeyModifiers::NONE, KeyCode::Enter) => {
             app.mode = Mode::Normal;
+            app.scroll = 0;
+        }
+        (KeyModifiers::NONE, KeyCode::Char('j')) | (KeyModifiers::NONE, KeyCode::Down) => {
+            app.scroll = app.scroll.saturating_add(1);
+        }
+        (KeyModifiers::NONE, KeyCode::Char('k')) | (KeyModifiers::NONE, KeyCode::Up) => {
+            app.scroll = app.scroll.saturating_sub(1);
+        }
+        (KeyModifiers::CONTROL, KeyCode::Char('d')) | (KeyModifiers::NONE, KeyCode::PageDown) => {
+            app.scroll = app.scroll.saturating_add(10);
+        }
+        (KeyModifiers::CONTROL, KeyCode::Char('u')) | (KeyModifiers::NONE, KeyCode::PageUp) => {
+            app.scroll = app.scroll.saturating_sub(10);
+        }
+        (KeyModifiers::NONE, KeyCode::Home) => {
+            app.scroll = 0;
         }
         _ => {}
     }
@@ -582,6 +602,7 @@ fn handle_sidebar_key(app: &mut App, key: KeyEvent) -> Result<()> {
         }
         (KeyModifiers::NONE, KeyCode::Char('?')) => {
             app.mode = Mode::Help;
+            app.scroll = 0;
         }
         (KeyModifiers::NONE, KeyCode::Char('q')) => {
             app.should_quit = true;
@@ -691,6 +712,7 @@ fn handle_graph_key(app: &mut App, key: KeyEvent) -> Result<()> {
         }
         (KeyModifiers::NONE, KeyCode::Char('?')) => {
             app.mode = Mode::Help;
+            app.scroll = 0;
         }
         _ => {}
     }

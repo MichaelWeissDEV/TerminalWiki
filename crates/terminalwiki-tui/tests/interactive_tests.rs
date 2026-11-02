@@ -482,3 +482,34 @@ fn daily_notes_todos_bookmarks_and_global_graph_flow() {
     assert_eq!(app.sidebar_mode, SidebarMode::Bookmarks);
     assert!(!app.sidebar_entries().is_empty());
 }
+
+#[test]
+fn help_screen_opens_scrolls_and_closes() {
+    let _guard = lock_tests();
+    let fx = fixture();
+    let mut app = app(&fx, "Source");
+
+    // Open Help via '?'
+    press(&mut app, KeyCode::Char('?'));
+    assert_eq!(app.mode, Mode::Help);
+    assert_eq!(app.scroll, 0);
+
+    // Scroll down and up
+    press(&mut app, KeyCode::Char('j'));
+    assert_eq!(app.scroll, 1);
+    press(&mut app, KeyCode::Char('k'));
+    assert_eq!(app.scroll, 0);
+
+    // Close via Esc
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.mode, Mode::Normal);
+
+    // Open Help via ':help'
+    app.command_input = "help".to_string();
+    app.execute_command();
+    assert_eq!(app.mode, Mode::Help);
+
+    // Close via 'q'
+    press(&mut app, KeyCode::Char('q'));
+    assert_eq!(app.mode, Mode::Normal);
+}

@@ -117,7 +117,7 @@ pub fn draw(app: &App) -> std::io::Result<()> {
             draw_inline_backlinks(app, width, height, &mut out)?;
         }
         Mode::Help => {
-            draw_full_help(width, height, &mut out)?;
+            draw_full_help(app, width, height, &mut out)?;
         }
         Mode::Graph => {
             draw_graph_view(app, width, height, &mut out)?;
@@ -239,6 +239,24 @@ pub fn draw(app: &App) -> std::io::Result<()> {
                 SetForegroundColor(CColor::DarkGrey),
                 Print(truncate_display_width(
                     &left_text,
+                    width.saturating_sub(right_w)
+                )),
+                Print(" ".repeat(foot_pad)),
+                Print(&right_text),
+                ResetColor
+            )?;
+        }
+        Mode::Help => {
+            let left_text = "  j/k / ↑/↓ scroll · Ctrl+d/u half page · Esc / ? / q close help";
+            let right_text = format!("{}  ", app.current_wiki);
+            let left_w = display_width(left_text);
+            let right_w = display_width(&right_text);
+            let foot_pad = width.saturating_sub(left_w + right_w);
+            execute!(
+                out,
+                SetForegroundColor(CColor::DarkGrey),
+                Print(truncate_display_width(
+                    left_text,
                     width.saturating_sub(right_w)
                 )),
                 Print(" ".repeat(foot_pad)),
@@ -987,13 +1005,25 @@ fn draw_inline_backlinks(
     Ok(())
 }
 
-fn draw_full_help(width: usize, height: usize, out: &mut std::io::Stdout) -> std::io::Result<()> {
+enum HelpRow<'a> {
+    Header(&'a str),
+    Entry(&'a str, &'a str),
+    Blank,
+}
+
+fn draw_full_help(
+    app: &App,
+    width: usize,
+    height: usize,
+    out: &mut std::io::Stdout,
+) -> std::io::Result<()> {
+    let header = "  TerminalWiki Help & Shortcuts Cheat Sheet · [j/k] Scroll · [Esc/q/?] Close";
     execute!(
         out,
         MoveTo(0, 2),
         SetForegroundColor(CColor::White),
         SetAttribute(Attribute::Bold),
-        Print("  TerminalWiki Keybindings"),
+        Print(truncate_display_width(header, width)),
         SetAttribute(Attribute::Reset),
         ResetColor
     )?;
@@ -1005,61 +1035,210 @@ fn draw_full_help(width: usize, height: usize, out: &mut std::io::Stdout) -> std
         ResetColor
     )?;
 
-    let help_lines = [
-        ("j / k / Up / Down", "Scroll down / up one line"),
-        ("h / l / Left / Right", "Scroll left / right"),
-        ("Ctrl+d / u", "Half-page down / up"),
-        ("Home / G", "Jump to top / bottom"),
-        (
-            "Tab / S-Tab / ] / [",
-            "Cycle through links (highlighted in article)",
+    let rows = [
+        HelpRow::Header("📖 NAVIGATION & READING"),
+        HelpRow::Entry("j / k / ↓ / ↑", "Scroll down / up one line"),
+        HelpRow::Entry("h / l / ← / →", "Scroll left / right"),
+        HelpRow::Entry("Ctrl+d / Ctrl+u", "Scroll half-page down / up"),
+        HelpRow::Entry("Home / G", "Jump to top / bottom of document"),
+        HelpRow::Entry(
+            "Ctrl+o / Backspace",
+            "Navigate backward in history (History Back)",
         ),
-        (
-            "1..9 / Enter",
-            "Quick-jump link 1..9 / follow selected link",
+        HelpRow::Entry("Ctrl+i", "Navigate forward in history (History Forward)"),
+        HelpRow::Entry(
+            "z",
+            "Toggle distraction-free Zen Reader mode (centered layout)",
         ),
-        (
-            "Ctrl+p / f",
-            "VS Code Quick Bar (pages, #tag filter, > commands)",
-        ),
-        (">", "Open Quick Bar directly in Command Palette mode"),
-        ("Ctrl+f / /", "Live in-page search (F3 / Ctrl+g next match)"),
-        (
-            "Ctrl+w",
-            "Wiki-wide full-text search (words & sentence parts)",
-        ),
-        ("Ctrl+n / Q", "Quick Note in QuickNotes/ (opens nvim/vim)"),
-        ("n / T", "New page / new todo list (Ctrl+e opens editor)"),
-        ("t", "Add #tag to current page"),
-        ("e", "Edit current page in $EDITOR (nvim/vim)"),
-        ("z", "Toggle Zen distraction-free reading mode"),
-        (
+        HelpRow::Entry(
             "w",
-            "Toggle Wikipedia 3-pane layout (Vault + Article + TOC)",
+            "Toggle Wikipedia 3-pane layout (Vault Tree + Article + TOC)",
         ),
-        ("s / v", "Toggle sidebar / switch Vault Tree vs Flat list"),
-        (
-            "o / b / g",
-            "Document outline / Backlinks / Knowledge graph",
+        HelpRow::Entry("r / :reload", "Reload current page from disk"),
+        HelpRow::Entry("q", "Quit TerminalWiki"),
+        HelpRow::Blank,
+        HelpRow::Header("🔗 LINKS & BROWSER WORKFLOW"),
+        HelpRow::Entry("Tab / ]", "Focus next link on page"),
+        HelpRow::Entry("S-Tab / [", "Focus previous link on page"),
+        HelpRow::Entry("1..9", "Direct quick-jump to link 1 to 9"),
+        HelpRow::Entry(
+            "Enter",
+            "Follow selected link (internal page or external URL)",
         ),
-        (
-            "Ctrl+o / i / Bksp",
-            "Navigate backward / forward in history",
+        HelpRow::Entry(
+            "L / :linkfilter",
+            "Toggle link filter: Internal wiki notes only ↔ All links",
         ),
-        (": / ? / q", "Command line / Help / Quit"),
+        HelpRow::Entry(
+            "http://, https://",
+            "External web links open directly in default system browser",
+        ),
+        HelpRow::Blank,
+        HelpRow::Header("📝 NOTES, TODOS & EDITING"),
+        HelpRow::Entry(
+            "d / :daily",
+            "Create / open today's Daily Note (Daily/YYYY-MM-DD.md)",
+        ),
+        HelpRow::Entry(
+            "x / Space / :todos",
+            "Toggle todo checkbox on current line (- [ ] ↔ - [x])",
+        ),
+        HelpRow::Entry("n", "Create a new Markdown note in current wiki"),
+        HelpRow::Entry("T", "Create a new note with #todo list template"),
+        HelpRow::Entry(
+            "Q / Ctrl+n",
+            "Create quick note in QuickNotes/ and open editor immediately",
+        ),
+        HelpRow::Entry(
+            "e / :edit",
+            "Open current file in external $EDITOR (nvim/vim)",
+        ),
+        HelpRow::Entry(
+            "t / :tag <tag>",
+            "Add #tag to current page frontmatter / body",
+        ),
+        HelpRow::Entry(
+            "m / :bookmark",
+            "Toggle bookmark / star page (displays ★ in header)",
+        ),
+        HelpRow::Blank,
+        HelpRow::Header("🕸️ KNOWLEDGE GRAPH (OBSIDIAN-STYLE)"),
+        HelpRow::Entry(
+            "g / :graph",
+            "Open interactive knowledge graph around current note",
+        ),
+        HelpRow::Entry(
+            "a",
+            "Toggle Local Neighborhood graph ↔ Global Vault Graph (all notes)",
+        ),
+        HelpRow::Entry(
+            "+ / -",
+            "Increase / decrease graph neighborhood depth (1 to 5 hops)",
+        ),
+        HelpRow::Entry("j / k / Tab", "Navigate graph nodes spatially"),
+        HelpRow::Entry(
+            "Enter",
+            "Open selected node directly in TUI (Markdown, LaTeX, BibTeX, PDF)",
+        ),
+        HelpRow::Entry("● Note (Green)", "Markdown document in wiki"),
+        HelpRow::Entry(
+            "◆ LaTeX (Magenta)",
+            "LaTeX document (.tex) with formula layout",
+        ),
+        HelpRow::Entry(
+            "▲ BibTeX (Yellow)",
+            "BibTeX bibliography (.bib) formatted with citations",
+        ),
+        HelpRow::Entry(
+            "■ PDF (Red)",
+            "PDF document with metadata & inline text preview",
+        ),
+        HelpRow::Entry("λ Code (Blue)", "Source code file"),
+        HelpRow::Entry(
+            "Tag Clustering",
+            "Notes sharing common #tags cluster with connecting edges",
+        ),
+        HelpRow::Blank,
+        HelpRow::Header("📂 SIDEBAR EXPLORER"),
+        HelpRow::Entry("s", "Toggle left sidebar visibility"),
+        HelpRow::Entry(
+            "Tab (in sidebar)",
+            "Cycle sidebar mode: Flat → Tree → Outline → Tags → Bookmarks",
+        ),
+        HelpRow::Entry("f", "Flat Pages list (all pages in current wiki)"),
+        HelpRow::Entry(
+            "v",
+            "Hierarchical Vault Folder Tree (📁 directory hierarchy)",
+        ),
+        HelpRow::Entry(
+            "o",
+            "Document Outline (all section headings § of current page)",
+        ),
+        HelpRow::Entry("t", "Tags Explorer (all tags with note counter)"),
+        HelpRow::Entry("b / m", "Bookmarks list (all pages starred with ★)"),
+        HelpRow::Entry(
+            "j / k / Enter",
+            "Select and open page / jump to heading / filter by tag",
+        ),
+        HelpRow::Blank,
+        HelpRow::Header("🔍 SEARCH & QUICK PALETTE"),
+        HelpRow::Entry(
+            "Ctrl+p / f",
+            "VS Code Quick Bar (search notes, #tag filter, > commands)",
+        ),
+        HelpRow::Entry(">", "Open Quick Bar in Command Palette mode directly"),
+        HelpRow::Entry(
+            ":<command>",
+            "Vim-style command line (new, daily, graph, latex, etc.)",
+        ),
+        HelpRow::Entry(
+            "Ctrl+f / /",
+            "Live in-page search (F3 / Ctrl+g jumps to next match)",
+        ),
+        HelpRow::Entry(
+            "Ctrl+w",
+            "Wiki-wide full-text search across all notes for phrases/words",
+        ),
+        HelpRow::Entry(
+            "b",
+            "Show Backlinks inspector (pages linking to current note)",
+        ),
+        HelpRow::Blank,
+        HelpRow::Header("📐 LATEX, FORMULAS & MEDIA"),
+        HelpRow::Entry(
+            "2D Unicode Math",
+            "Render \\frac, \\sqrt, \\int, matrices, equation/align environments",
+        ),
+        HelpRow::Entry(
+            ":latex [engine]",
+            "Compile .tex note with pdflatex, xelatex, tectonic, or latexmk",
+        ),
+        HelpRow::Entry(
+            ".bib Files",
+            "Render bibliography entries with authors, titles, DOIs, and URLs",
+        ),
+        HelpRow::Entry(
+            ".pdf Files",
+            "Extract and preview PDF text in terminal with action link",
+        ),
+        HelpRow::Entry(
+            ". Directory Ignore",
+            "Folders starting with . (.git, .obsidian, .trash) are ignored",
+        ),
     ];
 
     let view_height = height.saturating_sub(5);
-    for (i, (key, desc)) in help_lines.iter().take(view_height).enumerate() {
-        execute!(out, MoveTo(0, (4 + i) as u16))?;
-        execute!(
-            out,
-            SetForegroundColor(CColor::Cyan),
-            Print(format!("  {:<14}", key)),
-            SetForegroundColor(CColor::White),
-            Print(desc),
-            ResetColor
-        )?;
+    let max_scroll = rows.len().saturating_sub(view_height);
+    let scroll = app.scroll.min(max_scroll);
+
+    for (offset, row) in rows.iter().skip(scroll).take(view_height).enumerate() {
+        let y = (4 + offset) as u16;
+        execute!(out, MoveTo(0, y))?;
+        match row {
+            HelpRow::Header(title) => {
+                execute!(
+                    out,
+                    SetForegroundColor(CColor::Yellow),
+                    SetAttribute(Attribute::Bold),
+                    Print(format!("  {title}")),
+                    SetAttribute(Attribute::Reset),
+                    ResetColor
+                )?;
+            }
+            HelpRow::Entry(key, desc) => {
+                execute!(
+                    out,
+                    SetForegroundColor(CColor::Cyan),
+                    SetAttribute(Attribute::Bold),
+                    Print(format!("    {:<22}", key)),
+                    SetAttribute(Attribute::Reset),
+                    SetForegroundColor(CColor::White),
+                    Print(truncate_display_width(desc, width.saturating_sub(26))),
+                    ResetColor
+                )?;
+            }
+            HelpRow::Blank => {}
+        }
     }
 
     Ok(())
