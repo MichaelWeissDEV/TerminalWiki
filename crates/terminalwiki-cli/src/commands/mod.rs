@@ -7,6 +7,7 @@ pub mod files;
 pub mod find;
 pub mod graph;
 pub mod index;
+pub mod init;
 pub mod links;
 pub mod lint;
 pub mod new;
@@ -59,6 +60,7 @@ pub fn run(mut args: Args, config: Config, wikis: WikiSet) -> Result<()> {
         Command::Raw { page } => raw::raw(page, args, config, wikis),
         Command::Render { file } => render::render(file, args, config, wikis),
         Command::New { page } => new::new_page(page, args, config, wikis),
+        Command::Init { name } => init::init(name),
         Command::Edit { page } => edit::edit(page, args, config, wikis),
         Command::Delete { page, force } => delete::delete(page, force, args, config, wikis),
         Command::Backlinks { page } => links::backlinks(page, args, config, wikis),

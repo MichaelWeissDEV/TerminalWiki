@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use terminalwiki_core::watch::WikiWatcher;
 use terminalwiki_core::wiki::WikiSet;
-use terminalwiki_core::{Config, Result};
+use terminalwiki_core::{parse_command_argv, Config, Result};
 
 pub use app::App;
 pub use runtime::{AppEvent, EventLoop};
@@ -111,12 +111,12 @@ fn open_editor_subprocess(path: &PathBuf, config: &Config) -> Result<()> {
         .or_else(|| std::env::var("EDITOR").ok().filter(|s| !s.is_empty()))
         .unwrap_or_else(|| "nvim".to_string());
 
-    let parts: Vec<&str> = editor.split_whitespace().collect();
+    let parts = parse_command_argv(&editor)?;
     if parts.is_empty() {
         return Err(terminalwiki_core::Error::other("Editor is empty"));
     }
 
-    let mut cmd = std::process::Command::new(parts[0]);
+    let mut cmd = std::process::Command::new(&parts[0]);
     for arg in &parts[1..] {
         cmd.arg(arg);
     }

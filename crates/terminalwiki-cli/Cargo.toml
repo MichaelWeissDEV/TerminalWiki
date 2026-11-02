@@ -9,6 +9,7 @@ license.workspace = true
 terminalwiki-core = { workspace = true }
 terminalwiki-index = { workspace = true }
 terminalwiki-render = { workspace = true }
+terminalwiki-latex = { workspace = true }
 terminalwiki-graph = { workspace = true }
 terminalwiki-tui = { workspace = true }
 serde = { workspace = true }

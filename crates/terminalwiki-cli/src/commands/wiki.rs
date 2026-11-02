@@ -54,7 +54,7 @@ fn list(_args: Args, wikis: WikiSet) -> Result<()> {
 
 // ─── add ─────────────────────────────────────────────────────────────────────
 
-fn add(name: String, path: String, make_default: bool) -> Result<()> {
+pub(crate) fn add(name: String, path: String, make_default: bool) -> Result<()> {
     validate_name(&name)?;
     let expanded = expand_tilde(&PathBuf::from(&path));
     let abs = if expanded.is_absolute() {
@@ -292,7 +292,7 @@ fn write_config_raw(config: &Config) -> Result<()> {
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
-fn validate_name(name: &str) -> Result<()> {
+pub(crate) fn validate_name(name: &str) -> Result<()> {
     if name.is_empty() {
         return Err(Error::invalid_arguments("Wiki name cannot be empty."));
     }

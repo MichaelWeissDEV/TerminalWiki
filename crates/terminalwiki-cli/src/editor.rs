@@ -1,7 +1,7 @@
 use std::env;
 use std::path::Path;
 use std::process::Command;
-use terminalwiki_core::{Config, Error, Result};
+use terminalwiki_core::{parse_command_argv, Config, Error, Result};
 
 /// Resolves the editor from config, then env vars, then $PATH fallbacks.
 pub fn resolve_editor(config: &Config) -> String {
@@ -87,13 +87,12 @@ impl IsExecutable for Path {
 pub fn open_editor(path: &Path, config: &Config) -> Result<()> {
     let editor = resolve_editor(config);
 
-    // Handle case where editor might contain arguments like `code -w`
-    let parts: Vec<&str> = editor.split_whitespace().collect();
+    let parts = parse_command_argv(&editor)?;
     if parts.is_empty() {
         return Err(Error::other("Editor variable is empty"));
     }
 
-    let mut cmd = Command::new(parts[0]);
+    let mut cmd = Command::new(&parts[0]);
     for arg in &parts[1..] {
         cmd.arg(arg);
     }

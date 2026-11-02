@@ -43,6 +43,7 @@ members = [
     "crates/terminalwiki-core",
     "crates/terminalwiki-index",
     "crates/terminalwiki-render",
+    "crates/terminalwiki-latex",
     "crates/terminalwiki-graph",
     "crates/terminalwiki-tui",
     "crates/terminalwiki-cli",
@@ -58,6 +59,7 @@ license = "MIT OR Apache-2.0"
 terminalwiki-core = { path = "crates/terminalwiki-core", version = "0.1.0-alpha" }
 terminalwiki-index = { path = "crates/terminalwiki-index", version = "0.1.0-alpha" }
 terminalwiki-render = { path = "crates/terminalwiki-render", version = "0.1.0-alpha" }
+terminalwiki-latex = { path = "crates/terminalwiki-latex", version = "0.1.0-alpha" }
 terminalwiki-graph = { path = "crates/terminalwiki-graph", version = "0.1.0-alpha" }
 terminalwiki-tui = { path = "crates/terminalwiki-tui", version = "0.1.0-alpha" }
 

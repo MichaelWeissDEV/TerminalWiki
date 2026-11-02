@@ -230,7 +230,7 @@ pub fn resolve_shallow(wiki: &Wiki, name: &str) -> Option<Resolution> {
     let rel = Path::new(name.trim());
     let parent = rel.parent().unwrap_or(Path::new(""));
     let stem = rel.file_name()?.to_string_lossy().to_lowercase();
-    let dir = wiki.resolve_within(parent).ok()?;
+    let dir = resolve_parent_case_insensitive(wiki, parent)?;
     let entries = std::fs::read_dir(&dir).ok()?;
 
     let mut best: Option<Resolution> = None;
@@ -270,6 +270,32 @@ pub fn resolve_shallow(wiki: &Wiki, name: &str) -> Option<Resolution> {
         }
     }
     best
+}
+
+/// Resolves the parent directory for tier-2 case-insensitive matching.
+///
+/// File names were already compared case-insensitively below, but nested paths
+/// such as `security/heap` also need their *directory* segments matched on a
+/// case-sensitive filesystem. Each hop goes back through `resolve_within`, so a
+/// directory symlink cannot turn a lookup into an escape from the wiki root.
+fn resolve_parent_case_insensitive(wiki: &Wiki, parent: &Path) -> Option<PathBuf> {
+    let mut relative = PathBuf::new();
+    for component in parent.components() {
+        let std::path::Component::Normal(requested) = component else {
+            return None;
+        };
+        let current = wiki.resolve_within(&relative).ok()?;
+        let wanted = requested.to_string_lossy();
+        let matching = std::fs::read_dir(&current).ok()?.flatten().find(|entry| {
+            entry.file_type().is_ok_and(|kind| kind.is_dir())
+                && entry
+                    .file_name()
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case(&wanted)
+        })?;
+        relative.push(matching.file_name());
+    }
+    wiki.resolve_within(&relative).ok()
 }
 
 /// Tier 3: walk the wiki, matching stems, titles and aliases (spec §7, §13).

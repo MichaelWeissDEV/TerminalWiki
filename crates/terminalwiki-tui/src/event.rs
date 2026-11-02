@@ -170,13 +170,13 @@ fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<()> {
             if let Some(idx) = app.selected_link_idx {
                 if let Some(target) = app.links.get(idx).map(|l| l.target.clone()) {
                     match target {
-                        LinkTarget::Wiki {
-                            wiki,
-                            page,
-                            anchor: _,
-                        } => {
+                        LinkTarget::Wiki { wiki, page, anchor } => {
                             let target_wiki = wiki.unwrap_or_else(|| app.current_wiki.clone());
-                            let _ = app.load_page(&target_wiki, &page, true);
+                            if app.load_page(&target_wiki, &page, true).is_ok() {
+                                if let Some(anchor) = anchor {
+                                    jump_to_anchor(app, &anchor);
+                                }
+                            }
                         }
                         LinkTarget::External(url) => {
                             app.status_message = Some(format!("External link: {url}"));
@@ -191,12 +191,7 @@ fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<()> {
                             }
                         }
                         LinkTarget::Heading(anchor) => {
-                            for h in &app.headings {
-                                if h.text.eq_ignore_ascii_case(&anchor) {
-                                    app.scroll = h.line;
-                                    break;
-                                }
-                            }
+                            jump_to_anchor(app, &anchor);
                         }
                     }
                 }
@@ -205,6 +200,23 @@ fn handle_normal_key(app: &mut App, key: KeyEvent) -> Result<()> {
         _ => {}
     }
     Ok(())
+}
+
+/// Resolves link anchors with the same GitHub-compatible normalization used by
+/// core link parsing, so `[[Page#Heading Name]]` and `[[#heading-name]]` land
+/// on the same heading regardless of title casing or punctuation.
+fn jump_to_anchor(app: &mut App, anchor: &str) {
+    let wanted = terminalwiki_core::link::heading_anchor(anchor);
+    if let Some(heading) = app
+        .headings
+        .iter()
+        .find(|heading| terminalwiki_core::link::heading_anchor(&heading.text) == wanted)
+    {
+        app.scroll = heading.line;
+        app.status_message = Some(format!("Jumped to {}", heading.text));
+    } else {
+        app.status_message = Some(format!("Heading not found: {anchor}"));
+    }
 }
 
 fn handle_finder_key(app: &mut App, key: KeyEvent) -> Result<()> {

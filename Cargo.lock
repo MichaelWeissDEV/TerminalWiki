@@ -1373,6 +1373,7 @@ dependencies = [
  "terminalwiki-core",
  "terminalwiki-graph",
  "terminalwiki-index",
+ "terminalwiki-latex",
  "terminalwiki-render",
  "terminalwiki-tui",
  "toml",
@@ -1419,6 +1420,14 @@ dependencies = [
  "tempfile",
  "terminalwiki-core",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "terminalwiki-latex"
+version = "0.1.0-alpha"
+dependencies = [
+ "terminalwiki-core",
+ "terminalwiki-render",
 ]
 
 [[package]]

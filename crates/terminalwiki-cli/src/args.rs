@@ -41,6 +41,9 @@ pub enum Command {
     New {
         page: String,
     },
+    Init {
+        name: String,
+    },
     Edit {
         page: String,
     },
@@ -272,6 +275,19 @@ impl Args {
                 parsed.command = Command::New {
                     page: positional[1].clone(),
                 };
+            }
+            "init" => {
+                let name = match positional.as_slice() {
+                    [_, name] if !name.starts_with('-') => name.clone(),
+                    [_, flag, name] if flag == "--name" => name.clone(),
+                    [_, flag] if flag.starts_with("--name=") => flag["--name=".len()..].to_string(),
+                    [_] => "knowledge".to_string(),
+                    _ => return Err("Usage: tw init [NAME] or tw init --name NAME".to_string()),
+                };
+                if name.trim().is_empty() {
+                    return Err("Wiki name cannot be empty".to_string());
+                }
+                parsed.command = Command::Init { name };
             }
             "edit" => {
                 if positional.len() < 2 {

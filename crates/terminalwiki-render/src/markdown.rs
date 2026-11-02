@@ -17,7 +17,11 @@ pub fn parse_markdown(text: &str) -> Document {
     // ever see a complete `[[...]]` span.
     options.insert(Options::ENABLE_WIKILINKS);
 
-    let parser = Parser::new_ext(text, options);
+    // pulldown-cmark recognizes `$...$`/`$$...$$`, while Obsidian-style notes
+    // frequently also use `\(...\)` and `\[...\]`. Normalize only outside
+    // fenced and inline code, preserving escaped delimiters verbatim.
+    let normalized = normalize_math_delimiters(text);
+    let parser = Parser::new_ext(&normalized, options);
     let mut doc = Document::default();
 
     let mut block_stack: Vec<Vec<Block>> = vec![Vec::new()];
@@ -304,6 +308,66 @@ pub fn parse_markdown(text: &str) -> Document {
     doc
 }
 
+fn normalize_math_delimiters(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    let mut in_inline_code = false;
+    let mut in_fence = false;
+    let mut at_line_start = true;
+    while let Some(ch) = chars.next() {
+        if at_line_start && (ch == '`' || ch == '~') {
+            let mut marker = String::from(ch);
+            while chars.peek() == Some(&ch) && marker.len() < 3 {
+                marker.push(chars.next().unwrap_or(ch));
+            }
+            if marker.len() == 3 {
+                in_fence = !in_fence;
+            }
+            output.push_str(&marker);
+            at_line_start = false;
+            continue;
+        }
+        if !in_fence && ch == '`' {
+            in_inline_code = !in_inline_code;
+            output.push(ch);
+            at_line_start = false;
+            continue;
+        }
+        if !in_fence && !in_inline_code && ch == '\\' {
+            match chars.peek().copied() {
+                Some('(') => {
+                    chars.next();
+                    output.push('$');
+                    at_line_start = false;
+                    continue;
+                }
+                Some(')') => {
+                    chars.next();
+                    output.push('$');
+                    at_line_start = false;
+                    continue;
+                }
+                Some('[') => {
+                    chars.next();
+                    output.push_str("$$");
+                    at_line_start = false;
+                    continue;
+                }
+                Some(']') => {
+                    chars.next();
+                    output.push_str("$$");
+                    at_line_start = false;
+                    continue;
+                }
+                _ => {}
+            }
+        }
+        at_line_start = ch == '\n';
+        output.push(ch);
+    }
+    output
+}
+
 /// Parses inline `[[WikiLink]]` occurrences from raw text chunks.
 fn parse_wiki_links_in_text(text: &str, inlines: &mut Vec<Inline>) {
     let mut cursor = 0;
@@ -374,6 +438,26 @@ mod tests {
             }
             _ => panic!("Expected Block::Image"),
         }
+    }
+
+    #[test]
+    fn normalizes_obsidian_math_delimiters_but_not_code() {
+        let doc = parse_markdown("Inline \\(x^2\\) and \\[\\frac{a}{b}\\].\n\n`\\(code\\)`\n");
+        assert!(
+            matches!(
+                &doc.blocks[1],
+                Block::Paragraph(inlines) if inlines.iter().any(|inline| matches!(inline, Inline::Math(value) if value == "x^2"))
+            ),
+            "{doc:?}"
+        );
+        assert!(matches!(
+            &doc.blocks[0],
+            Block::Math(value) if value == "\\frac{a}{b}"
+        ));
+        assert!(matches!(
+            &doc.blocks[2],
+            Block::Paragraph(inlines) if inlines.iter().any(|inline| matches!(inline, Inline::Code(_)))
+        ));
     }
 
     #[test]

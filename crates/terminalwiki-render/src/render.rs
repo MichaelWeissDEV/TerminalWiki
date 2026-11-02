@@ -7,6 +7,7 @@ use crate::document::{
     Block, Document, Inline, LinkTarget, RenderedDocument, RenderedHeading, RenderedLink, Span,
 };
 use crate::highlight::highlight;
+use crate::math::layout_math;
 use crate::theme::{SemanticColor, Theme};
 use crate::width::wrap_text;
 
@@ -234,10 +235,13 @@ impl<'a> Renderer<'a> {
             }
 
             Block::Math(formula) => {
-                rdoc.lines.push(vec![Span {
-                    text: format!("{indent}  ⟨ {formula} ⟩"),
-                    style: self.theme.style(SemanticColor::Code),
-                }]);
+                let layout = layout_math(formula);
+                for line in layout.lines {
+                    rdoc.lines.push(vec![Span {
+                        text: format!("{indent}  {line}"),
+                        style: self.theme.style(SemanticColor::Code),
+                    }]);
+                }
             }
         }
     }
@@ -367,8 +371,12 @@ impl<'a> Renderer<'a> {
                     });
                 }
                 Inline::Math(m) => {
+                    let layout = layout_math(m);
                     spans.push(Span {
-                        text: format!("⟨{m}⟩"),
+                        // Inline contexts cannot occupy more than one terminal
+                        // row; preserve the native glyph conversion while using
+                        // spaces to flatten a multi-row fraction/root.
+                        text: layout.lines.join(" "),
                         style: self.theme.style(SemanticColor::Code),
                     });
                 }

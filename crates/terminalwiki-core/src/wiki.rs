@@ -161,20 +161,20 @@ pub fn resolve_within(root: &Path, rel: &Path) -> Result<PathBuf> {
 
     let joined = root.join(&normalized);
 
-    // Canonical check: only meaningful once the path exists.
-    if joined.exists() {
-        let canonical = std::fs::canonicalize(&joined).map_err(|e| Error::io(&joined, e))?;
-        let canonical_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
-        if !canonical.starts_with(&canonical_root) {
-            return Err(Error::PathRefused {
-                path: rel.to_path_buf(),
-                reason: "path leaves the wiki root through a symbolic link".into(),
-            });
-        }
-        return Ok(canonical);
+    // Canonicalise the nearest existing ancestor as well as an existing target.
+    // This matters for writes: `escape/new.md` does not exist yet, but `escape`
+    // may already be a symlink outside the wiki. Checking only `joined.exists()`
+    // would let `create_dir_all`/`write` follow that symlink.
+    let canonical = canonicalize_lenient(&joined);
+    let canonical_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    if !canonical.starts_with(&canonical_root) {
+        return Err(Error::PathRefused {
+            path: rel.to_path_buf(),
+            reason: "path leaves the wiki root through a symbolic link".into(),
+        });
     }
 
-    Ok(joined)
+    Ok(canonical)
 }
 
 /// Canonicalises a path that may not exist yet.
@@ -425,6 +425,23 @@ mod tests {
         // `tw new` needs a path for a file that does not exist yet.
         let got = resolve_within(Path::new("/wiki"), Path::new("new/page.md")).unwrap();
         assert_eq!(got, PathBuf::from("/wiki/new/page.md"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn nonexistent_file_below_an_escaping_symlink_is_refused() {
+        let base = tmpdir("create-symlink-escape");
+        let wiki = base.join("wiki");
+        let outside = base.join("outside");
+        fs::create_dir_all(&wiki).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, wiki.join("escape")).unwrap();
+
+        let err = resolve_within(&wiki, Path::new("escape/new/page.md")).unwrap_err();
+        assert!(matches!(err, Error::PathRefused { .. }), "{err:?}");
+        assert!(!outside.join("new/page.md").exists());
+
+        fs::remove_dir_all(&base).ok();
     }
 
     #[test]

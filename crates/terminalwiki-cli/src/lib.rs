@@ -61,6 +61,7 @@ fn print_help() {
     println!("  tw search QUERY    search the knowledge base");
     println!("  tw find QUERY      fuzzy-find a page");
     println!("  tw tui             open the interactive interface");
+    println!("  tw init [NAME]     initialize and register the current directory as a wiki");
     println!("  tw new PAGE        create a new page");
     println!("  tw edit PAGE       edit a page in your editor");
     println!("  tw backlinks PAGE  show what links to a page");
